@@ -1,0 +1,91 @@
+name: Deploy tax-late-calc static site
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tax-late-calc-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: tax-late-calc-dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy production
+    needs: build
+    runs-on:
+      - acctprompt-aws-windows-server
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source code (nginx config)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          clean: true
+
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: tax-late-calc-dist
+          path: dist
+
+      - name: Copy files
+        shell: powershell
+        run: |
+          $target = "C:\acctprompt-project\Apps\tax-late-calc"
+          New-Item -ItemType Directory -Force $target | Out-Null
+          # /MIR ทำให้โฟลเดอร์ปลายทางเหมือนต้นทาง (ลบไฟล์เก่าที่ไม่มีแล้ว) โดยไม่ต้องหยุดบริการ
+          robocopy ".\dist" $target /MIR /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0
+
+      - name: Copy nginx conf file
+        shell: powershell
+        run: |
+          Copy-Item -Path "nginx\tax-late-calc.conf" -Destination "C:\nginx\conf\conf.d\" -Force
+
+      - name: Reload nginx
+        shell: powershell
+        run: |
+          cd C:\nginx\
+          .\nginx.exe -t
+          .\nginx.exe -s reload

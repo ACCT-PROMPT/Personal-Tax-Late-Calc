@@ -1,9 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Prompt:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
+/* ฟอนต์: A-Z / 0-9 = Poppins, ภาษาไทย = LINE Seed Sans TH (self-host ใน public/fonts) */
+@font-face{font-family:"Poppins";font-style:normal;font-weight:100 500;font-display:swap;src:url("/fonts/Poppins-Regular.woff2") format("woff2");unicode-range:U+0020-007E,U+00A0-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2030,U+2039-203A,U+20AC,U+2122,U+2190-2193,U+2212;}
+@font-face{font-family:"Poppins";font-style:normal;font-weight:600 900;font-display:swap;src:url("/fonts/Poppins-Bold.woff2") format("woff2");unicode-range:U+0020-007E,U+00A0-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2030,U+2039-203A,U+20AC,U+2122,U+2190-2193,U+2212;}
+@font-face{font-family:"LINE Seed Sans TH";font-style:normal;font-weight:100 500;font-display:swap;src:url("/fonts/LINESeedSansTH-Regular.woff2") format("woff2");}
+@font-face{font-family:"LINE Seed Sans TH";font-style:normal;font-weight:600 700;font-display:swap;src:url("/fonts/LINESeedSansTH-Bold.woff2") format("woff2");}
+@font-face{font-family:"LINE Seed Sans TH";font-style:normal;font-weight:800 900;font-display:swap;src:url("/fonts/LINESeedSansTH-ExtraBold.woff2") format("woff2");}
+
 @theme {
-  --font-sans: "Prompt", "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Poppins", "LINE Seed Sans TH", system-ui, sans-serif;
+  /* ตัวเลขทั้งหน้าใช้ class font-mono จึงให้ใช้ฟอนต์ชุดเดียวกัน (0-9 = Poppins) */
+  --font-mono: "Poppins", "LINE Seed Sans TH", system-ui, sans-serif;
 }
 
 html {
