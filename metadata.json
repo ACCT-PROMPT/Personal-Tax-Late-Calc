@@ -1,0 +1,6 @@
+{
+  "name": "ระบบคิดค่าปรับภาษีเงินได้บุคคลธรรมดา",
+  "description": "ระบบคำนวณค่าปรับภาษีเงินได้บุคคลธรรมดา กรณียื่นภาษีไม่ครบ ล่าช้า และโดนปรับ อ้างอิงเกณฑ์กรมสรรพากร",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

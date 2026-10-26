@@ -1,0 +1,2128 @@
+import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Calculator,
+  AlertTriangle,
+  Calendar,
+  HelpCircle,
+  CheckCircle,
+  Percent,
+  ArrowRight,
+  BookOpen,
+  Clock,
+  RotateCcw,
+  Sparkles,
+  Building,
+  ChevronDown,
+  Check,
+  Info,
+  ChevronRight,
+  ShieldCheck,
+  MapPin,
+  ExternalLink,
+  Copy,
+  Printer,
+  X,
+  FileText,
+  Download
+} from 'lucide-react';
+
+import html2canvas from 'html2canvas';
+
+import {
+  FilingMethod,
+  FilingScenario,
+  PenaltyReduction,
+  IncomeEstimation,
+} from './types';
+
+import {
+  TAX_YEARS,
+  calculateTaxPenalties,
+  estimateMissingTax,
+  calculateProgressiveTax,
+  calculateVatPenalties,
+  getVatDeadline
+} from './utils/taxCalc';
+
+import TaxDonutChart from './components/TaxDonutChart';
+import ProgressiveTaxBar from './components/ProgressiveTaxBar';
+import { AnimatedNumber } from './components/AnimatedNumber';
+
+export default function App() {
+  // แท็บที่เลือกใช้งาน: ภาษีเงินได้บุคคลธรรมดา (pit) หรือ ภาษีมูลค่าเพิ่ม (vat)
+  const [activeTab, setActiveTab] = useState<'pit' | 'vat'>('pit');
+
+  // === โหมดภาษีมูลค่าเพิ่ม (VAT) ===
+  const [vatOwedInput, setVatOwedInput] = useState<string>('10000');
+  const [vatMonth, setVatMonth] = useState<number>(5); // เดือนพฤษภาคม
+  const [vatYearTh, setVatYearTh] = useState<number>(2568);
+  const [vatFilingMethod, setVatFilingMethod] = useState<FilingMethod>(FilingMethod.ONLINE);
+  const [vatScenario, setVatScenario] = useState<'voluntary_additional' | 'voluntary_late' | 'assessed_incorrect' | 'assessed_not_filed'>('voluntary_additional');
+  const [vatPaymentDate, setVatPaymentDate] = useState<string>('2026-06-29');
+
+  // โหมดการกรอกยอดภาษีค้างชำระสำหรับ VAT
+  const [vatOwedMode, setVatOwedMode] = useState<'simple' | 'estimate'>('simple');
+  const [vatSalesInput, setVatSalesInput] = useState<string>('150000');
+  const [vatPurchasesInput, setVatPurchasesInput] = useState<string>('50000');
+  const [vatUseAuto, setVatUseAuto] = useState<boolean>(true); // คำนวณ 7% อัตโนมัติ หรือไม่
+  const [vatOutputVatInput, setVatOutputVatInput] = useState<string>('10500'); // ยอดภาษีขายกำหนดเอง
+  const [vatInputVatInput, setVatInputVatInput] = useState<string>('3500'); // ยอดภาษีซื้อกำหนดเอง
+
+  // โหมดการกรอกยอดภาษีค้างชำระ
+  const [taxOwedMode, setTaxOwedMode] = useState<'simple' | 'estimate'>('simple');
+
+  // ข้อมูลตั้งค่าหลัก
+  const [taxYearTh, setTaxYearTh] = useState<number>(2568);
+  const [filingMethod, setFilingMethod] = useState<FilingMethod>(FilingMethod.ONLINE);
+  const [scenario, setScenario] = useState<FilingScenario>(FilingScenario.VOLUNTARY);
+  const [reduction, setReduction] = useState<PenaltyReduction>(PenaltyReduction.WITHIN_30_DAYS);
+  
+  // วันที่คาดว่าจะยื่นชำระจริง (Default เป็นวันนี้ 2026-06-29 ตาม metadata)
+  const [paymentDate, setPaymentDate] = useState<string>('2026-06-29');
+
+  // ยอดภาษีขาดกรณีกรอกโดยตรง
+  const [taxOwedInput, setTaxOwedInput] = useState<string>('5000');
+
+  // รายละเอียดสำหรับการประเมินรายได้เพื่อคำนวณภาษีขาด
+  const [incomeEst, setIncomeEst] = useState<IncomeEstimation>({
+    income40_1: 480000, // สมมติเงินเดือน 40,000 บาท/เดือน ทั้งปี = 480,000
+    incomeOther: 0,
+    expenseMethod: 'standard',
+    expenses: 0,
+    personalAllowance: 60000,
+    otherAllowances: 15000, // เช่น ประกันสังคม
+    taxAlreadyPaid: 8500,  // หัก ณ ที่จ่ายสะสม
+  });
+
+  // ใช้สำหรับเปิด/ปิด สรุปขั้นตอนคำนวณอย่างย่อ
+  const [showFormulaInfo, setShowFormulaInfo] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+
+  // ตัวจัดรูปแบบวันที่ให้อ่านง่ายเป็นภาษาไทย
+  const formatThaiDate = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      const thMonths = [
+        'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+        'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+      ];
+      return `${date.getDate()} ${thMonths[date.getMonth()]} ${date.getFullYear() + 543}`;
+    } catch {
+      return dateStr;
+    }
+  };
+
+  // ฟังก์ชันจัดรูปแบบตัวเลขให้ใส่คอมม่า (เช่น 10000 -> 10,000)
+  const formatNumberWithCommas = (value: number | string) => {
+    if (value === undefined || value === null) return '';
+    const clean = value.toString().replace(/,/g, '');
+    if (clean === '') return '';
+    const parts = clean.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  };
+
+  // ฟังก์ชันสำหรับคัดลอกรายงานสรุปผล
+  const handleCopySummary = () => {
+    let summaryText = '';
+    if (activeTab === 'pit') {
+      const scenarioText = scenario === FilingScenario.VOLUNTARY 
+        ? 'ยื่นเพิ่มเติมด้วยตนเอง (Voluntary)' 
+        : scenario === FilingScenario.ASSESSED_INCORRECT 
+          ? 'สรรพากรตรวจสอบพบความผิดพลาด (ยื่นขาด)' 
+          : 'สรรพากรตรวจสอบพบว่าไม่ได้ยื่นแบบ';
+      
+      summaryText = `📋 สรุปผลการประเมินเบี้ยปรับและเงินเพิ่มภาษีเงินได้บุคคลธรรมดา
+-----------------------------------------
+ปีภาษี: พ.ศ. ${taxYearTh} (รูปแบบการยื่น: ${filingMethod === FilingMethod.ONLINE ? 'ยื่นออนไลน์' : 'ยื่นกระดาษ'})
+สถานการณ์การยื่น: ${scenarioText}
+จำนวนเดือนที่ล่าช้า: ${calculationResult.monthsLate} เดือน (กำหนดชำระปกติ: ${formatThaiDate(currentDeadline)})
+วันที่คาดว่าจะยื่นชำระจริง: ${formatThaiDate(paymentDate)}
+-----------------------------------------
+1. ยอดภาษีค้างชำระหลัก: ฿${calculationResult.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+2. รวมค่าปรับทางอาญา: ฿${calculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+3. เงินเพิ่มสะสม (ม. 27): ฿${calculationResult.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${calculationResult.monthsLate === 0 ? '0' : (1.5 * calculationResult.monthsLate).toFixed(1)}% ต่อเดือน)
+4. ค่าเบี้ยปรับ (ม. 22): ฿${calculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (ลดจากยอดเต็ม ฿${calculationResult.penaltyOriginal.toLocaleString()} คงเหลือ ${calculationResult.penaltyDiscountPercent}%)
+-----------------------------------------
+💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${calculationResult.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+🎉 ประหยัดเบี้ยปรับไปได้: ฿${(calculationResult.penaltyOriginal - calculationResult.penaltyReduced).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+-----------------------------------------
+*คำนวณโดยระบบประเมินค่าปรับภาษีเงินได้บุคคลธรรมดาแบบ Real-time`;
+    } else {
+      const scenarioText = vatScenario === 'voluntary_additional'
+        ? 'สมัครใจยื่นเพิ่มเติม (เคยยื่นแต่ไม่ครบ)'
+        : vatScenario === 'voluntary_late'
+          ? 'สมัครใจยื่นล่าช้าครั้งแรก (ไม่เคยยื่นเลย)'
+          : vatScenario === 'assessed_incorrect'
+            ? 'สรรพากรตรวจสอบพบ (ยื่นแบบไว้แต่ไม่ครบ)'
+            : 'สรรพากรตรวจสอบพบ (ไม่เคยยื่นแบบเลย)';
+            
+      const monthNamesTh = [
+        'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+        'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+      ];
+      
+      summaryText = `📋 สรุปผลการประเมินเบี้ยปรับและเงินเพิ่มภาษีมูลค่าเพิ่ม (VAT ภ.พ.30)
+-----------------------------------------
+เดือนภาษี: ${monthNamesTh[vatMonth - 1]} พ.ศ. ${vatYearTh}
+รูปแบบการยื่น: ${vatFilingMethod === FilingMethod.ONLINE ? 'ยื่นออนไลน์ (ภายในวันที่ 23)' : 'ยื่นกระดาษ (ภายในวันที่ 15)'}
+สถานการณ์การยื่น: ${scenarioText}
+จำนวนเดือนที่ล่าช้า: ${vatCalculationResult.monthsLate} เดือน (กำหนดชำระปกติ: ${formatThaiDate(vatDeadline)})
+วันที่คาดว่าจะยื่นชำระจริง: ${formatThaiDate(vatPaymentDate)}
+-----------------------------------------
+1. ยอดภาษี VAT ค้างชำระหลัก: ฿${vatCalculationResult.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+2. รวมค่าปรับทางอาญา: ฿${vatCalculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+3. เงินเพิ่มสะสม (1.5% ต่อเดือน): ฿${vatCalculationResult.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+4. ค่าเบี้ยปรับ (ภ.พ.30): ฿${vatCalculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (อัตราเบี้ยปรับยื่นล่าช้าเสียจริง ${vatCalculationResult.penaltyPercentApplied}% ของยอดภาษี จากอัตราสูงสุดเต็ม)
+-----------------------------------------
+💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${vatCalculationResult.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+🎉 ประหยัดเบี้ยปรับไปได้: ฿${(vatCalculationResult.penaltyOriginal - vatCalculationResult.penaltyReduced).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+-----------------------------------------
+*คำนวณโดยระบบประเมินค่าปรับภาษีมูลค่าเพิ่ม (ภ.พ.30) แบบ Real-time`;
+    }
+    
+    navigator.clipboard.writeText(summaryText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const [exporting, setExporting] = useState<boolean>(false);
+
+  const handleDownloadImage = async () => {
+    const element = document.getElementById('printable-receipt');
+    if (!element) return;
+    try {
+      setExporting(true);
+      // Wait a microsecond for DOM to be stable
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        onclone: (clonedDoc) => {
+          // Adjust styles on the cloned document for best image rendering if needed
+          const clonedElement = clonedDoc.getElementById('printable-receipt');
+          if (clonedElement) {
+            clonedElement.style.padding = '24px';
+            clonedElement.style.background = '#ffffff';
+          }
+        }
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.download = `tax-summary-year-${taxYearTh}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Failed to export image', err);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // คำนวณตัวเลขทางภาษีขั้นต้น (กรณีเลือกโหมดประเมินรายได้)
+  const estimationResult = useMemo(() => {
+    return estimateMissingTax(incomeEst);
+  }, [incomeEst]);
+
+  // ยอดภาษีค้างชำระที่จะนำไปคิดค่าปรับจริง
+  const taxOwedToUse = useMemo(() => {
+    if (taxOwedMode === 'simple') {
+      const parsed = parseFloat(taxOwedInput.replace(/,/g, ''));
+      return isNaN(parsed) || parsed < 0 ? 0 : parsed;
+    } else {
+      return estimationResult.estimatedAdditionalTaxNeeded;
+    }
+  }, [taxOwedMode, taxOwedInput, estimationResult]);
+
+  // คำนวณเบี้ยปรับ เงินเพิ่ม และค่าปรับทั้งหมด
+  const calculationResult = useMemo(() => {
+    return calculateTaxPenalties(
+      taxOwedToUse,
+      taxYearTh,
+      filingMethod,
+      scenario,
+      reduction,
+      paymentDate
+    );
+  }, [taxOwedToUse, taxYearTh, filingMethod, scenario, reduction, paymentDate]);
+
+  // === สำหรับหน้าภาษีมูลค่าเพิ่ม (VAT) ===
+  const vatEstimationResult = useMemo(() => {
+    const sales = parseFloat(vatSalesInput.replace(/,/g, '')) || 0;
+    const purchases = parseFloat(vatPurchasesInput.replace(/,/g, '')) || 0;
+
+    let outputVat = 0;
+    if (vatUseAuto) {
+      outputVat = Math.round(sales * 0.07 * 100) / 100;
+    } else {
+      outputVat = parseFloat(vatOutputVatInput.replace(/,/g, '')) || 0;
+    }
+
+    let inputVat = 0;
+    if (vatUseAuto) {
+      inputVat = Math.round(purchases * 0.07 * 100) / 100;
+    } else {
+      inputVat = parseFloat(vatInputVatInput.replace(/,/g, '')) || 0;
+    }
+
+    const netVatOwed = Math.max(0, outputVat - inputVat);
+
+    return {
+      sales,
+      purchases,
+      outputVat,
+      inputVat,
+      netVatOwed,
+    };
+  }, [vatSalesInput, vatPurchasesInput, vatUseAuto, vatOutputVatInput, vatInputVatInput]);
+
+  const vatOwedToUse = useMemo(() => {
+    if (vatOwedMode === 'simple') {
+      const parsed = parseFloat(vatOwedInput.replace(/,/g, ''));
+      return isNaN(parsed) || parsed < 0 ? 0 : parsed;
+    } else {
+      return vatEstimationResult.netVatOwed;
+    }
+  }, [vatOwedMode, vatOwedInput, vatEstimationResult]);
+
+  const vatCalculationResult = useMemo(() => {
+    return calculateVatPenalties(
+      vatOwedToUse,
+      vatMonth,
+      vatYearTh,
+      vatFilingMethod,
+      vatScenario,
+      vatPaymentDate
+    );
+  }, [vatOwedToUse, vatMonth, vatYearTh, vatFilingMethod, vatScenario, vatPaymentDate]);
+
+  const vatDeadline = useMemo(() => {
+    return getVatDeadline(vatMonth, vatYearTh, vatFilingMethod);
+  }, [vatMonth, vatYearTh, vatFilingMethod]);
+
+  // ข้อมูลปีภาษีปัจจุบันที่เลือก
+  const currentYearConfig = useMemo(() => {
+    return TAX_YEARS.find(y => y.yearTh === taxYearTh) || TAX_YEARS[0];
+  }, [taxYearTh]);
+
+  const currentDeadline = useMemo(() => {
+    return filingMethod === FilingMethod.ONLINE 
+      ? currentYearConfig.onlineDeadline 
+      : currentYearConfig.paperDeadline;
+  }, [currentYearConfig, filingMethod]);
+
+  // รีเซ็ตข้อมูลในส่วนของความเสี่ยงรายได้กลับสู่ค่าเริ่มต้น
+  const handleResetEstimation = () => {
+    setIncomeEst({
+      income40_1: 480000,
+      incomeOther: 0,
+      expenseMethod: 'standard',
+      expenses: 0,
+      personalAllowance: 60000,
+      otherAllowances: 15000,
+      taxAlreadyPaid: 8500,
+    });
+  };
+
+  // รีเซ็ตข้อมูลส่วนประมาณการภาษีมูลค่าเพิ่มกลับสู่ค่าเริ่มต้น
+  const handleResetVatEstimation = () => {
+    setVatSalesInput('150000');
+    setVatPurchasesInput('50000');
+    setVatUseAuto(true);
+    setVatOutputVatInput('10500');
+    setVatInputVatInput('3500');
+  };
+
+  // Dynamic resolution variables for sharing results/receipts between PIT and VAT
+  const resultToUse = activeTab === 'pit' ? calculationResult : vatCalculationResult;
+  const isVoluntaryResult = activeTab === 'pit' 
+    ? (scenario === FilingScenario.VOLUNTARY) 
+    : (vatScenario === 'voluntary_additional' || vatScenario === 'voluntary_late');
+  const scenarioLabelResult = activeTab === 'pit'
+    ? (scenario === FilingScenario.VOLUNTARY ? 'ยื่นเพิ่มเติมสมัครใจ' : 'เจ้าหน้าที่ตรวจประเมิน')
+    : (vatScenario.startsWith('voluntary') ? 'ยื่นเพิ่มเติมสมัครใจ (ภ.พ.30)' : 'เจ้าหน้าที่ตรวจประเมิน (ภ.พ.30)');
+  const deadlineToUse = activeTab === 'pit' ? currentDeadline : vatDeadline;
+  const paymentDateToUse = activeTab === 'pit' ? paymentDate : vatPaymentDate;
+  const yearThToUse = activeTab === 'pit' ? taxYearTh : vatYearTh;
+  const filingMethodToUse = activeTab === 'pit' ? filingMethod : vatFilingMethod;
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 antialiased font-sans flex flex-col">
+      {/* ส่วนหัวของแอป (Header) */}
+      <header className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white py-6 px-4 shadow-md shrink-0 border-b border-indigo-950">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-indigo-500/20 rounded-xl border border-indigo-400/30 text-emerald-400">
+              <Calculator className="w-8 h-8" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider font-extrabold bg-emerald-500/20 text-emerald-400 rounded border border-emerald-400/20">
+                  อัปเดตเกณฑ์สรรพากรล่าสุด
+                </span>
+              </div>
+              <h1 className="text-xl md:text-2xl font-bold tracking-tight mt-0.5">
+                ระบบคิดค่าปรับภาษีเงินได้บุคคลธรรมดา
+              </h1>
+              <p className="text-xs text-slate-300 font-light mt-0.5">
+                คำนวณภาษีไม่ครบ ภาษีล่าช้า เบี้ยปรับ เงินเพิ่ม และค่าปรับอาญา เพื่อความถูกต้องและรวดเร็ว
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4 text-xs bg-white/5 py-2 px-3.5 rounded-xl border border-white/10">
+            <div className="text-right">
+              <span className="block text-slate-400 font-mono text-[10px]">CURRENT TIME (LOCAL)</span>
+              <span className="font-semibold text-emerald-400 font-mono">
+                {formatThaiDate('2026-06-29')}
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ส่วนเลือกแท็บ (Tab Switcher) */}
+      <div className="bg-white border-b border-slate-200 shrink-0 shadow-sm relative z-10">
+        <div className="max-w-7xl mx-auto px-4 flex gap-6">
+          <button
+            type="button"
+            onClick={() => setActiveTab('pit')}
+            className={`py-4 px-2 font-bold text-sm border-b-2 flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'pit'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Calculator className="w-4 h-4 text-indigo-500" />
+            ภาษีเงินได้บุคคลธรรมดา (ภ.ง.ด.90/91)
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('vat')}
+            className={`py-4 px-2 font-bold text-sm border-b-2 flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'vat'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Percent className="w-4 h-4 text-indigo-500" />
+            ภาษีมูลค่าเพิ่ม (VAT ภ.พ.30)
+          </button>
+        </div>
+      </div>
+
+      {/* เนื้อหาหลักของแอป (Main Content Layout) */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        
+        {/* คอลัมน์ซ้าย: ฟอร์มกรอกข้อมูลและตั้งค่า (col-span-7) */}
+        <section id="input-section" className="lg:col-span-7 space-y-6">
+          {activeTab === 'pit' ? (
+            <>
+              {/* การตั้งค่าและเงื่อนไขการยื่น */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-5">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold font-mono">1</span>
+              <h2 className="text-sm font-bold text-slate-900">กำหนดปีภาษีและรูปแบบการยื่นชำระ</h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* ปีภาษี */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                  ปีภาษี (พ.ศ.)
+                  <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={taxYearTh}
+                    onChange={(e) => setTaxYearTh(parseInt(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 appearance-none transition-colors"
+                  >
+                    {TAX_YEARS.map((y) => (
+                      <option key={y.yearTh} value={y.yearTh}>
+                        ปีภาษี {y.yearTh} (ยื่นต้นปี {y.yearTh + 1})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* ช่องทางการยื่น */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-600">
+                  ช่องทางการยื่นแบบแสดงรายการ
+                </label>
+                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-1 rounded-xl border border-slate-200/60">
+                  <button
+                    type="button"
+                    onClick={() => setFilingMethod(FilingMethod.ONLINE)}
+                    className={`py-1.5 text-xs font-medium rounded-lg transition-all ${
+                      filingMethod === FilingMethod.ONLINE
+                        ? 'bg-white text-indigo-700 shadow-sm border border-slate-100'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    ผ่านอินเทอร์เน็ต
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilingMethod(FilingMethod.PAPER)}
+                    className={`py-1.5 text-xs font-medium rounded-lg transition-all ${
+                      filingMethod === FilingMethod.PAPER
+                        ? 'bg-white text-indigo-700 shadow-sm border border-slate-100'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    ยื่นแบบกระดาษ
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              {/* วันสิ้นสุดกำหนดการปกติ */}
+              <div className="p-3 bg-slate-50/60 border border-slate-200/50 rounded-xl space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">วันสิ้นสุดกำหนดเวลาตามกฎหมาย</span>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-slate-500" />
+                  <span className="text-xs font-bold text-slate-700">
+                    {formatThaiDate(currentDeadline)}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 font-light">
+                  {filingMethod === FilingMethod.ONLINE 
+                    ? '* ได้สิทธิขยายเวลาการยื่นแบบออนไลน์ 8 วัน' 
+                    : '* ยื่นแบบกระดาษที่สำนักงานสรรพากรพื้นที่'}
+                </p>
+              </div>
+
+              {/* วันที่ชำระจริง */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-600 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    วันที่ชำระภาษีจริง / คาดว่าจะชำระ
+                    <span className="text-red-500">*</span>
+                  </span>
+                  {calculationResult.monthsLate > 0 && (
+                    <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-rose-50 text-rose-600 rounded-md border border-rose-100 animate-pulse">
+                      เลยกำหนด {calculationResult.monthsLate} เดือน
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    min={currentYearConfig.paperDeadline}
+                    className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* กรณีการยื่นภาษี */}
+            <div className="space-y-2 pt-1">
+              <label className="text-xs font-semibold text-slate-600 block">
+                ลักษณะการยื่นแบบแสดงรายการ (กรณีที่ตรวจพบข้อผิดพลาด)
+              </label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                
+                {/* ยื่นด้วยตนเอง */}
+                <button
+                  type="button"
+                  onClick={() => setScenario(FilingScenario.VOLUNTARY)}
+                  className={`p-3.5 text-left rounded-xl border transition-all flex flex-col justify-between h-full ${
+                    scenario === FilingScenario.VOLUNTARY
+                      ? 'bg-emerald-50/50 border-emerald-400 ring-2 ring-emerald-400/10'
+                      : 'bg-white border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex justify-between items-start w-full">
+                    <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
+                      scenario === FilingScenario.VOLUNTARY ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      ยื่นเพิ่มเติมเอง
+                    </span>
+                    {scenario === FilingScenario.VOLUNTARY && <CheckCircle className="w-4 h-4 text-emerald-500" />}
+                  </div>
+                  <div className="mt-2.5">
+                    <span className="block text-xs font-bold text-slate-900">สมัครใจยื่นย้อนหลัง</span>
+                    <span className="block text-[10px] text-slate-500 font-light mt-0.5">
+                      งดเบี้ยปรับ (0%), เสียเฉพาะเงินเพิ่ม 1.5% และค่าปรับอาญา
+                    </span>
+                  </div>
+                </button>
+
+                {/* โดนประเมิน (ยื่นไว้ไม่ครบ) */}
+                <button
+                  type="button"
+                  onClick={() => setScenario(FilingScenario.ASSESSED_INCORRECT)}
+                  className={`p-3.5 text-left rounded-xl border transition-all flex flex-col justify-between h-full ${
+                    scenario === FilingScenario.ASSESSED_INCORRECT
+                      ? 'bg-amber-50/50 border-amber-400 ring-2 ring-amber-400/10'
+                      : 'bg-white border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex justify-between items-start w-full">
+                    <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
+                      scenario === FilingScenario.ASSESSED_INCORRECT ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      สรรพากรประเมิน
+                    </span>
+                    {scenario === FilingScenario.ASSESSED_INCORRECT && <CheckCircle className="w-4 h-4 text-amber-500" />}
+                  </div>
+                  <div className="mt-2.5">
+                    <span className="block text-xs font-bold text-slate-900">ยื่นแบบไว้แต่ไม่ครบ</span>
+                    <span className="block text-[10px] text-slate-500 font-light mt-0.5">
+                      เบี้ยปรับ 1 เท่า (100%), เงินเพิ่ม 1.5% และค่าปรับอาญาเต็มอัตรา
+                    </span>
+                  </div>
+                </button>
+
+                {/* โดนประเมิน (ไม่ได้ยื่นเลย) */}
+                <button
+                  type="button"
+                  onClick={() => setScenario(FilingScenario.ASSESSED_NOT_FILED)}
+                  className={`p-3.5 text-left rounded-xl border transition-all flex flex-col justify-between h-full ${
+                    scenario === FilingScenario.ASSESSED_NOT_FILED
+                      ? 'bg-rose-50/50 border-rose-400 ring-2 ring-rose-400/10'
+                      : 'bg-white border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex justify-between items-start w-full">
+                    <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
+                      scenario === FilingScenario.ASSESSED_NOT_FILED ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      สรรพากรประเมิน
+                    </span>
+                    {scenario === FilingScenario.ASSESSED_NOT_FILED && <CheckCircle className="w-4 h-4 text-rose-500" />}
+                  </div>
+                  <div className="mt-2.5">
+                    <span className="block text-xs font-bold text-slate-900">ไม่ได้ยื่นแบบเลย</span>
+                    <span className="block text-[10px] text-slate-500 font-light mt-0.5">
+                      เบี้ยปรับ 2 เท่า (200%), เงินเพิ่ม 1.5% และค่าปรับอาญาเต็มอัตรา
+                    </span>
+                  </div>
+                </button>
+
+              </div>
+            </div>
+          </div>
+
+          {/* ส่วนระบุตัวเลขภาษีค้างชำระ */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold font-mono">2</span>
+                <h2 className="text-sm font-bold text-slate-900">ระบุยอดเงินภาษีที่ชำระขาด</h2>
+              </div>
+
+              {/* แท็บสลับโหมดการคำนวณ */}
+              <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200/30 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setTaxOwedMode('simple')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                    taxOwedMode === 'simple'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  กรอกภาษีโดยตรง
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTaxOwedMode('estimate')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all flex items-center gap-1 ${
+                    taxOwedMode === 'estimate'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  <Sparkles className="w-3 h-3 text-indigo-500" />
+                  ช่วยคำนวณรายได้
+                </button>
+              </div>
+            </div>
+
+            {/* โหมด 1: กรอกภาษีตรงๆ */}
+            {taxOwedMode === 'simple' && (
+              <motion.div
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-3"
+              >
+                <p className="text-xs text-slate-500 font-light">
+                  กรณีทราบยอดภาษีเงินได้บุคคลธรรมดาที่ต้องชำระเพิ่มเติมแล้ว (เช่น สรรพากรแจ้ง หรือประเมินได้เลขแน่ชัด) สามารถกรอกลงช่องด้านล่างได้ทันที
+                </p>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-600">
+                    ยอดเงินภาษีต้นที่ต้องชำระเพิ่ม (บาท)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-3 text-sm font-semibold text-slate-400 font-mono">฿</span>
+                    <input
+                      type="text"
+                      value={formatNumberWithCommas(taxOwedInput)}
+                      onChange={(e) => {
+                        const cleanVal = e.target.value.replace(/,/g, '');
+                        if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                          setTaxOwedInput(cleanVal);
+                        }
+                      }}
+                      placeholder="เช่น 10,000"
+                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 font-semibold text-base rounded-xl py-2.5 pl-8 pr-12 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    />
+                    <span className="absolute right-3.5 top-3.5 text-[10px] font-bold text-slate-400">THB</span>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* โหมด 2: ช่วยคำนวณภาษีขาด */}
+            {taxOwedMode === 'estimate' && (
+              <motion.div
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-4"
+              >
+                <div className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl flex items-start gap-2 text-xs">
+                  <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-indigo-900 block">โปรแกรมช่วยประเมินเงินได้พึงประเมิน</span>
+                    <p className="text-indigo-800 font-light leading-relaxed">
+                      ช่วยคำนวณฐานภาษีบุคคลธรรมดาเพื่อหาจำนวน "ภาษีที่ชำระไม่ครบ" โดยนำมาหักลบกับภาษีเดิมที่เสียไปแล้วให้อัตโนมัติ เพื่อส่งยอดเข้าคิดเบี้ยปรับ
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* เงินได้ 40(1) */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-600 block">
+                      เงินได้พึงประเมินประเภท 40(1) (เงินเดือนสะสมทั้งปี)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                      <input
+                        type="text"
+                        value={formatNumberWithCommas(incomeEst.income40_1)}
+                        onChange={(e) => {
+                          const cleanVal = e.target.value.replace(/,/g, '');
+                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                            setIncomeEst({ ...incomeEst, income40_1: parseFloat(cleanVal) || 0 });
+                          }
+                        }}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  {/* เงินได้ประเภทอื่นๆ */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-600 block">
+                      รายได้ประเภทอื่นๆ สะสมทั้งปี (เช่น ค้าขาย, รับจ้าง)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                      <input
+                        type="text"
+                        value={formatNumberWithCommas(incomeEst.incomeOther)}
+                        onChange={(e) => {
+                          const cleanVal = e.target.value.replace(/,/g, '');
+                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                            setIncomeEst({ ...incomeEst, incomeOther: parseFloat(cleanVal) || 0 });
+                          }
+                        }}
+                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* หักค่าใช้จ่ายส่วนที่เพิ่ม */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-600 block flex justify-between">
+                      <span>ค่าใช้จ่ายหักเหมา / เพิ่มเติม</span>
+                      <span className="text-[10px] text-indigo-600 font-light">* เงินเดือนหักเหมาให้อัตโนมัติ</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                      <input
+                        type="text"
+                        value={formatNumberWithCommas(incomeEst.expenses)}
+                        onChange={(e) => {
+                          const cleanVal = e.target.value.replace(/,/g, '');
+                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                            setIncomeEst({ ...incomeEst, expenses: parseFloat(cleanVal) || 0 });
+                          }
+                        }}
+                        placeholder="หักเหมาอื่นๆ หรือตามจริง"
+                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  {/* ลดหย่อนอื่นๆ */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-600 block flex justify-between">
+                      <span>ค่าลดหย่อนอื่นๆ (รวมประกันสังคม/กองทุน)</span>
+                      <span className="text-[10px] text-emerald-600 font-light">+ ส่วนตัว 60,000 เติมให้แล้ว</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                      <input
+                        type="text"
+                        value={formatNumberWithCommas(incomeEst.otherAllowances)}
+                        onChange={(e) => {
+                          const cleanVal = e.target.value.replace(/,/g, '');
+                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                            setIncomeEst({ ...incomeEst, otherAllowances: parseFloat(cleanVal) || 0 });
+                          }
+                        }}
+                        placeholder="ระบุค่าลดหย่อนเพิ่ม เช่น ดอกเบี้ยกู้บ้าน"
+                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  {/* ภาษีที่จ่ายล่วงหน้าแล้ว */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-600 block">
+                      ภาษีที่จ่ายไปแล้ว / โดนหัก ณ ที่จ่ายสะสม
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                      <input
+                        type="text"
+                        value={formatNumberWithCommas(incomeEst.taxAlreadyPaid)}
+                        onChange={(e) => {
+                          const cleanVal = e.target.value.replace(/,/g, '');
+                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                            setIncomeEst({ ...incomeEst, taxAlreadyPaid: parseFloat(cleanVal) || 0 });
+                          }
+                        }}
+                        className="w-full bg-white border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  {/* สรุปข้อมูลการประเมินภาษีแบบก้าวหน้า */}
+                  <div className="flex flex-col justify-end">
+                    <div className="text-right space-y-1">
+                      <span className="text-[10px] text-slate-400 font-medium block">ประเมินภาษีขาดสะสม</span>
+                      <div className="text-sm font-extrabold text-indigo-700 font-mono">
+                        ฿{estimationResult.estimatedAdditionalTaxNeeded.toLocaleString()}
+                      </div>
+                      <span className="text-[9px] text-slate-400 font-light block">
+                        (ยอดจริง ฿{estimationResult.estimatedTaxTotal.toLocaleString()} - จ่ายแล้ว ฿{incomeEst.taxAlreadyPaid.toLocaleString()})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* แสดงรายละเอียดแบร็กเก็ตที่เสียภาษี */}
+                {estimationResult.netIncome > 0 && (
+                  <ProgressiveTaxBar
+                    netIncome={estimationResult.netIncome}
+                    bracketBreakdown={calculateProgressiveTax(estimationResult.netIncome).bracketBreakdown}
+                    totalTax={estimationResult.estimatedTaxTotal}
+                  />
+                )}
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleResetEstimation}
+                    className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 hover:text-slate-800 transition-colors py-1 px-2.5 rounded-lg border border-slate-200/80 bg-white"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    รีเซ็ตค่าประเมิน
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </div>
+
+          {/* ส่วนเงื่อนไขเบี้ยปรับกรณีโดนประเมินโดยเจ้าหน้าที่ */}
+          <AnimatePresence>
+            {scenario !== FilingScenario.VOLUNTARY && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="space-y-4 pt-3 border-t border-slate-100 overflow-hidden"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-light leading-relaxed text-slate-600">
+              <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-[11px] mb-1">
+                    <Building className="w-3.5 h-3.5" />
+                    <span>มาตรา 35 (ค่าปรับอาญา)</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับสูงสุดไม่เกิน 2,000 บาท 
+                    (ลดหย่อนเหลือ 100/200 บาทตามกรอบวันล่าช้า)
+                  </p>
+                </div>
+                <a
+                  href="https://www.rd.go.th/37392.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold pt-1 self-start"
+                >
+                  เปิดดูที่เว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
+
+              <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] mb-1">
+                    <Percent className="w-3.5 h-3.5" />
+                    <span>มาตรา 27 (เงินเพิ่มสะสม)</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    ต้องรับผิดเสียเงินเพิ่มร้อยละ 1.5 ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน) 
+                    ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีต้น (อธิบดีไม่มีอำนาจงด/ลด)
+                  </p>
+                </div>
+                <a
+                  href="http://rd.go.th/562.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-800 font-semibold pt-1 self-start"
+                >
+                  เปิดดูที่เว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                อัตราการขอลดหย่อนเบี้ยปรับ (ตามกรอบเวลาชำระนับแต่วันที่ได้รับคำเตือน)
+              </label>
+              <p className="text-[11px] text-slate-400 font-light leading-relaxed">
+                หากยื่นแบบล่าช้าจากการโดนประเมิน/ตักเตือน เจ้าหน้าที่มีสิทธิ์ลดอัตราเบี้ยปรับ (เบี้ยปรับ 1-2 เท่า) ตามกรอบเวลาที่ท่านไปเข้าชำระจริง
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                {/* ย่อยภายใน 30 วัน */}
+                <button
+                  type="button"
+                  onClick={() => setReduction(PenaltyReduction.WITHIN_30_DAYS)}
+                  className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
+                    reduction === PenaltyReduction.WITHIN_30_DAYS
+                      ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <div className="space-y-0.5">
+                    <span className="block text-xs font-bold">ภายใน 30 วัน</span>
+                    <span className="block text-[10px] text-slate-400 font-light">
+                      ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 20%
+                    </span>
+                  </div>
+                  {reduction === PenaltyReduction.WITHIN_30_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                </button>
+
+                    {/* ย่อยภายใน 31-60 วัน */}
+                    <button
+                      type="button"
+                      onClick={() => setReduction(PenaltyReduction.WITHIN_60_DAYS)}
+                      className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
+                        reduction === PenaltyReduction.WITHIN_60_DAYS
+                          ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-0.5">
+                        <span className="block text-xs font-bold">ภายใน 31 - 60 วัน</span>
+                        <span className="block text-[10px] text-slate-400 font-light">
+                          ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 25%
+                        </span>
+                      </div>
+                      {reduction === PenaltyReduction.WITHIN_60_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </button>
+
+                    {/* ย่อยภายใน 61-90 วัน */}
+                    <button
+                      type="button"
+                      onClick={() => setReduction(PenaltyReduction.WITHIN_90_DAYS)}
+                      className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
+                        reduction === PenaltyReduction.WITHIN_90_DAYS
+                          ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-0.5">
+                        <span className="block text-xs font-bold">ภายใน 61 - 90 วัน</span>
+                        <span className="block text-[10px] text-slate-400 font-light">
+                          ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 30%
+                        </span>
+                      </div>
+                      {reduction === PenaltyReduction.WITHIN_90_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </button>
+
+                    {/* ย่อยเกิน 90 วัน */}
+                    <button
+                      type="button"
+                      onClick={() => setReduction(PenaltyReduction.OVER_90_DAYS)}
+                      className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
+                        reduction === PenaltyReduction.OVER_90_DAYS
+                          ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-0.5">
+                        <span className="block text-xs font-bold">เกิน 90 วันขึ้นไป</span>
+                        <span className="block text-[10px] text-slate-400 font-light">
+                          ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 50%
+                        </span>
+                      </div>
+                      {reduction === PenaltyReduction.OVER_90_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </button>
+
+                  </div>
+                </div>
+
+                {/* ตัวเลือกจ่ายยอดเต็ม */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setReduction(PenaltyReduction.NO_REDUCTION)}
+                    className={`w-full p-2.5 text-center text-xs font-semibold rounded-xl border transition-all ${
+                      reduction === PenaltyReduction.NO_REDUCTION
+                        ? 'border-slate-600 bg-slate-800 text-white'
+                        : 'border-slate-200 bg-white text-slate-600 hover:text-slate-800 hover:bg-slate-50'
+                    }`}
+                  >
+                    {reduction === PenaltyReduction.NO_REDUCTION ? '✓ เลือกชำระเบี้ยปรับอัตราเต็ม (ไม่ยื่นขอลดหย่อน)' : 'ชำระเบี้ยปรับอัตราเต็ม (ไม่ยื่นขอลดหย่อน) — 100%'}
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* อ้างอิงทางกฎหมาย */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-1.5 text-slate-800">
+                <BookOpen className="w-4.5 h-4.5 text-indigo-600" />
+                <h3 className="text-xs font-bold uppercase tracking-wider">เอกสารและข้อกฎหมายอ้างอิง</h3>
+              </div>
+              <span className="text-[10px] text-slate-400 font-light">อ้างอิงตรงจากประมวลรัษฎากร</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-light leading-relaxed text-slate-600">
+              <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-[11px] mb-1">
+                    <Building className="w-3.5 h-3.5" />
+                    <span>มาตรา 35 (ค่าปรับอาญา)</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับสูงสุดไม่เกิน 2,000 บาท 
+                    (ลดหย่อนเหลือ 100/200 บาทตามกรอบวันล่าช้า)
+                  </p>
+                </div>
+                <a
+                  href="https://www.rd.go.th/37392.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold pt-1 self-start"
+                >
+                  เปิดดูที่เว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
+
+              <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] mb-1">
+                    <Percent className="w-3.5 h-3.5" />
+                    <span>มาตรา 27 (เงินเพิ่มสะสม)</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    ต้องรับผิดเสียเงินเพิ่มร้อยละ 1.5 ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน) 
+                    ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีต้น (อธิบดีไม่มีอำนาจงด/ลด)
+                  </p>
+                </div>
+                <a
+                  href="http://rd.go.th/562.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-800 font-semibold pt-1 self-start"
+                >
+                  เปิดดูที่เว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
+            </div>
+          </div>
+            </>
+          ) : (
+            <>
+              {/* ============================================== */}
+              {/* แผงควบคุมฝั่ง VAT (Value Added Tax) */}
+              {/* ============================================== */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-5 animate-fadeIn">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold font-mono">1</span>
+                  <h2 className="text-sm font-bold text-slate-900">กำหนดเดือน/ปีภาษี และช่องทางยื่นแบบ</h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* เดือนภาษี */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                      เดือนภาษี
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={vatMonth}
+                        onChange={(e) => setVatMonth(parseInt(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 appearance-none transition-colors"
+                      >
+                        {[
+                          'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+                          'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+                        ].map((m, idx) => (
+                          <option key={idx + 1} value={idx + 1}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* ปีภาษี (พ.ศ.) */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                      ปีภาษี (พ.ศ.)
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={vatYearTh}
+                        onChange={(e) => setVatYearTh(parseInt(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 appearance-none transition-colors"
+                      >
+                        {[2569, 2568, 2567, 2566, 2565].map((year) => (
+                          <option key={year} value={year}>
+                            พ.ศ. {year}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* ช่องทางการยื่น */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600">
+                      ช่องทางการยื่นแบบแสดงรายการ
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 bg-slate-50 p-1 rounded-xl border border-slate-200/60">
+                      <button
+                        type="button"
+                        onClick={() => setVatFilingMethod(FilingMethod.ONLINE)}
+                        className={`py-1.5 text-xs font-medium rounded-lg transition-all ${
+                          vatFilingMethod === FilingMethod.ONLINE
+                            ? 'bg-white text-indigo-700 shadow-sm border border-slate-100'
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                      >
+                        ผ่านเน็ต (วันที่ 23)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVatFilingMethod(FilingMethod.PAPER)}
+                        className={`py-1.5 text-xs font-medium rounded-lg transition-all ${
+                          vatFilingMethod === FilingMethod.PAPER
+                            ? 'bg-white text-indigo-700 shadow-sm border border-slate-100'
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                      >
+                        ยื่นกระดาษ (วันที่ 15)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  {/* วันสิ้นสุดกำหนดการปกติ */}
+                  <div className="p-3 bg-slate-50/60 border border-slate-200/50 rounded-xl space-y-1">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">วันสิ้นสุดกำหนดเวลาปกติตามกฎหมาย</span>
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4 text-slate-500" />
+                      <span className="text-xs font-bold text-slate-700">
+                        {formatThaiDate(vatDeadline)}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-light">
+                      {vatFilingMethod === FilingMethod.ONLINE 
+                        ? '* ได้สิทธิขยายเวลาการยื่นแบบออนไลน์ 8 วัน (ภายในวันที่ 23 ของเดือนถัดไป)' 
+                        : '* ยื่นแบบกระดาษ (ภายในวันที่ 15 ของเดือนถัดไป)'}
+                    </p>
+                  </div>
+
+                  {/* วันที่ชำระจริง */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600 flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        วันที่คาดว่าจะชำระภาษีจริง
+                        <span className="text-red-500">*</span>
+                      </span>
+                      {vatCalculationResult.monthsLate > 0 && (
+                        <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-rose-50 text-rose-600 rounded-md border border-rose-100 animate-pulse">
+                          เลยกำหนด {vatCalculationResult.monthsLate} เดือน
+                        </span>
+                      )}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="date"
+                        value={vatPaymentDate}
+                        onChange={(e) => setVatPaymentDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ยอดเงินภาษีค้างชำระของ VAT */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold font-mono">2</span>
+                    <h2 className="text-sm font-bold text-slate-900">ระบุยอดภาษีมูลค่าเพิ่มค้างชำระ (VAT Owed)</h2>
+                  </div>
+
+                  {/* แท็บสลับโหมดการคำนวณของ VAT */}
+                  <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200/30 text-xs self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setVatOwedMode('simple')}
+                      className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                        vatOwedMode === 'simple'
+                          ? 'bg-white text-slate-800 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      กรอกภาษีโดยตรง
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVatOwedMode('estimate')}
+                      className={`px-2.5 py-1 rounded-md font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                        vatOwedMode === 'estimate'
+                          ? 'bg-white text-slate-800 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <Sparkles className="w-3 h-3 text-indigo-500" />
+                      ช่วยคำนวณภาษี (VAT)
+                    </button>
+                  </div>
+                </div>
+
+                {/* โหมด 1: กรอกภาษีตรงๆ */}
+                {vatOwedMode === 'simple' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-3"
+                  >
+                    <p className="text-xs text-slate-500 font-light">
+                      กรณีทราบยอดภาษีมูลค่าเพิ่มที่ชำระขาด/ยื่นเพิ่มเติมแล้ว สามารถกรอกยอดลงช่องด้านล่างได้ทันที
+                    </p>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-slate-600">
+                        จำนวนเงินภาษีมูลค่าเพิ่มที่ต้องชำระสะสม / ยื่นเพิ่มเติม <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-3 text-sm text-slate-400 font-semibold font-mono">฿</span>
+                        <input
+                          type="text"
+                          value={vatOwedInput}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/,/g, '');
+                            if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                              setVatOwedInput(formatNumberWithCommas(val));
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-900 text-base font-extrabold rounded-xl py-2.5 pl-9 pr-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-mono transition-colors"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-light">
+                        * ยอดเงินภาษีมูลค่าเพิ่มที่ไม่ได้ยื่นหรือยื่นขาด (ไม่รวมยอดขาย)
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* โหมด 2: ช่วยคำนวณภาษีมูลค่าเพิ่มค้างชำระ (VAT Owed Estimate) */}
+                {vatOwedMode === 'estimate' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-4"
+                  >
+                    <div className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl flex items-start gap-2 text-xs">
+                      <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <span className="font-bold text-indigo-900 block">โปรแกรมช่วยประเมินและคำนวณภาษีมูลค่าเพิ่ม (ภ.พ.30)</span>
+                        <p className="text-indigo-800 font-light leading-relaxed">
+                          คำนวณหาภาษีที่ต้องชำระเพิ่มจากสูตร: <strong className="font-bold">ภาษีขาย (Output VAT) - ภาษีซื้อ (Input VAT)</strong> โดยสามารถเลือกคำนวณอัตโนมัติที่อัตราร้อยละ 7 หรือระบุยอดภาษีโดยตรง
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* เลือกอัตราและวิธีคำนวณภาษี */}
+                    <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                      <span className="text-xs font-bold text-slate-700">การหาค่าภาษีมูลค่าเพิ่ม (ภาษีขาย/ภาษีซื้อ)</span>
+                      <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="vat_calc_method"
+                            checked={vatUseAuto === true}
+                            onChange={() => setVatUseAuto(true)}
+                            className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                          />
+                          <span>คำนวณให้ 7% อัตโนมัติ</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="vat_calc_method"
+                            checked={vatUseAuto === false}
+                            onChange={() => setVatUseAuto(false)}
+                            className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                          />
+                          <span>ระบุยอดภาษีเอง</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* ยอดขาย และ ภาษีขาย */}
+                      <div className="space-y-3 p-3 bg-slate-50/40 border border-slate-100 rounded-xl">
+                        <h3 className="text-xs font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-100/50 pb-1.5 mb-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                          ส่วนภาษีขาย (Output VAT)
+                        </h3>
+                        
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600 block">
+                            ยอดขาย/รายรับทั้งเดือนที่ต้องเสียภาษี
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                            <input
+                              type="text"
+                              value={formatNumberWithCommas(vatSalesInput)}
+                              onChange={(e) => {
+                                const cleanVal = e.target.value.replace(/,/g, '');
+                                if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                                  setVatSalesInput(cleanVal);
+                                }
+                              }}
+                              className="w-full bg-white border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600 block flex justify-between">
+                            <span>ยอดเงินภาษีขาย (Output VAT)</span>
+                            {vatUseAuto && <span className="text-[9px] text-indigo-600 font-normal bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100">(คำนวณ 7%)</span>}
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                            <input
+                              type="text"
+                              disabled={vatUseAuto}
+                              value={vatUseAuto ? formatNumberWithCommas(vatEstimationResult.outputVat) : formatNumberWithCommas(vatOutputVatInput)}
+                              onChange={(e) => {
+                                const cleanVal = e.target.value.replace(/,/g, '');
+                                if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                                  setVatOutputVatInput(cleanVal);
+                                }
+                              }}
+                              className={`w-full text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none font-semibold ${
+                                vatUseAuto 
+                                  ? 'bg-slate-100 border border-slate-200 text-slate-500 cursor-not-allowed' 
+                                  : 'bg-white border border-slate-200 focus:ring-1 focus:ring-indigo-500 text-slate-800'
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ยอดซื้อ และ ภาษีซื้อ */}
+                      <div className="space-y-3 p-3 bg-slate-50/40 border border-slate-100 rounded-xl">
+                        <h3 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5 border-b border-emerald-100/50 pb-1.5 mb-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          ส่วนภาษีซื้อ (Input VAT)
+                        </h3>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600 block">
+                            ยอดซื้อ/รายจ่ายทั้งเดือนที่มีใบกำกับภาษีถูกต้อง
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                            <input
+                              type="text"
+                              value={formatNumberWithCommas(vatPurchasesInput)}
+                              onChange={(e) => {
+                                const cleanVal = e.target.value.replace(/,/g, '');
+                                if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                                  setVatPurchasesInput(cleanVal);
+                                }
+                              }}
+                              className="w-full bg-white border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600 block flex justify-between">
+                            <span>ยอดเงินภาษีซื้อที่ใช้สิทธิ์ได้ (Input VAT)</span>
+                            {vatUseAuto && <span className="text-[9px] text-emerald-600 font-normal bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-100">(คำนวณ 7%)</span>}
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
+                            <input
+                              type="text"
+                              disabled={vatUseAuto}
+                              value={vatUseAuto ? formatNumberWithCommas(vatEstimationResult.inputVat) : formatNumberWithCommas(vatInputVatInput)}
+                              onChange={(e) => {
+                                const cleanVal = e.target.value.replace(/,/g, '');
+                                if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
+                                  setVatInputVatInput(cleanVal);
+                                }
+                              }}
+                              className={`w-full text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none font-semibold ${
+                                vatUseAuto 
+                                  ? 'bg-slate-100 border border-slate-200 text-slate-500 cursor-not-allowed' 
+                                  : 'bg-white border border-slate-200 focus:ring-1 focus:ring-indigo-500 text-slate-800'
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* สรุปข้อมูลการประเมิน VAT Owed */}
+                    <div className="flex flex-col md:flex-row justify-between items-center p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50 gap-3">
+                      <div className="text-left space-y-0.5">
+                        <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">สมการภาษีมูลค่าเพิ่มที่ต้องชำระ (ภ.พ.30)</span>
+                        <div className="text-xs text-slate-600">
+                          ภาษีขาย <strong>฿{vatEstimationResult.outputVat.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong> - ภาษีซื้อ <strong>฿{vatEstimationResult.inputVat.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
+                        </div>
+                      </div>
+
+                      <div className="text-center md:text-right space-y-0.5">
+                        <span className="text-[10px] text-slate-400 font-medium block">ประเมินภาษีมูลค่าเพิ่มค้างชำระสุทธิ</span>
+                        <div className="text-lg font-extrabold text-indigo-700 font-mono">
+                          ฿{vatEstimationResult.netVatOwed.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleResetVatEstimation}
+                        className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 hover:text-slate-800 transition-colors py-1 px-2.5 rounded-lg border border-slate-200/80 bg-white cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        รีเซ็ตค่าประเมิน
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </div>
+
+              {/* เงื่อนไขลักษณะการยื่นและอัตราเบี้ยปรับของ VAT */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold font-mono">3</span>
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-sm font-bold text-slate-900">ระบุลักษณะความรับผิด และตัวคูณเบี้ยปรับ</h2>
+                    <span className="px-1.5 py-0.5 text-[9px] bg-emerald-50 text-emerald-700 font-bold rounded">ภ.พ.30</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {/* 1. สมัครใจยื่นเพิ่มเติม */}
+                  <button
+                    type="button"
+                    onClick={() => setVatScenario('voluntary_additional')}
+                    className={`p-3.5 text-left rounded-xl border flex flex-col justify-between transition-all gap-1.5 ${
+                      vatScenario === 'voluntary_additional'
+                        ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                        : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center w-full">
+                      <span className="text-xs font-bold">1. สมัครใจยื่นเพิ่มเติม</span>
+                      {vatScenario === 'voluntary_additional' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-light leading-relaxed">
+                      เคยยื่นแบบไว้แล้วแต่ไม่ครบถ้วน สมัครใจยื่นแบบเพิ่มเติมด้วยตัวเอง <strong>(เบี้ยปรับเต็ม 1 เท่า ได้รับยกเว้นเหลือตามเกณฑ์ 2% - 20%)</strong>
+                    </p>
+                  </button>
+
+                  {/* 2. สมัครใจยื่นช้า */}
+                  <button
+                    type="button"
+                    onClick={() => setVatScenario('voluntary_late')}
+                    className={`p-3.5 text-left rounded-xl border flex flex-col justify-between transition-all gap-1.5 ${
+                      vatScenario === 'voluntary_late'
+                        ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                        : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center w-full">
+                      <span className="text-xs font-bold">2. สมัครใจยื่นล่าช้า (ไม่เคยยื่น)</span>
+                      {vatScenario === 'voluntary_late' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-light leading-relaxed">
+                      ไม่เคยยื่นแบบรายเดือนนั้นมาก่อน สมัครใจเข้ายื่นแบบย้อนหลังล่าช้าด้วยตัวเอง <strong>(เบี้ยปรับเต็ม 2 เท่า ได้รับยกเว้นเหลือตามเกณฑ์ 10% - 40%)</strong>
+                    </p>
+                  </button>
+
+                  {/* 3. เจ้าหน้าที่ตรวจสอบพบ (ยื่นขาด) */}
+                  <button
+                    type="button"
+                    onClick={() => setVatScenario('assessed_incorrect')}
+                    className={`p-3.5 text-left rounded-xl border flex flex-col justify-between transition-all gap-1.5 ${
+                      vatScenario === 'assessed_incorrect'
+                        ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                        : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center w-full">
+                      <span className="text-xs font-bold">3. เจ้าหน้าที่ประเมิน (ยื่นขาด)</span>
+                      {vatScenario === 'assessed_incorrect' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-light leading-relaxed">
+                      เคยยื่นไว้ไม่ครบถ้วน จนกระทั่งถูกสรรพากรตรวจสอบพบและมีหนังสือประเมินภาษี <strong>(เสียเบี้ยปรับเต็มอัตราตามจริง 1 เท่า หรือ 100%)</strong>
+                    </p>
+                  </button>
+
+                  {/* 4. เจ้าหน้าที่ตรวจสอบพบ (ไม่ได้ยื่นแบบ) */}
+                  <button
+                    type="button"
+                    onClick={() => setVatScenario('assessed_not_filed')}
+                    className={`p-3.5 text-left rounded-xl border flex flex-col justify-between transition-all gap-1.5 ${
+                      vatScenario === 'assessed_not_filed'
+                        ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                        : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center w-full">
+                      <span className="text-xs font-bold">4. เจ้าหน้าที่ประเมิน (ไม่ได้ยื่นแบบ)</span>
+                      {vatScenario === 'assessed_not_filed' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-light leading-relaxed">
+                      ไม่ได้ยื่นแบบแสดงรายการเลยจนถูกตรวจพบ และมีหนังสือประเมินภาษีย้อนหลัง <strong>(เสียเบี้ยปรับเต็มอัตราสูงสุดตามจริง 2 เท่า หรือ 200%)</strong>
+                    </p>
+                  </button>
+                </div>
+
+                {/* แสดงตารางความเร็วในการขอลดหย่อนกรณีสมัครใจ */}
+                {(vatScenario === 'voluntary_additional' || vatScenario === 'voluntary_late') && (
+                  <div className="p-4 bg-indigo-50/40 border border-indigo-100 rounded-xl space-y-2.5 text-xs text-indigo-950">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <Sparkles className="w-4 h-4 text-indigo-600" />
+                      <span>เกณฑ์ลดหย่อนเบี้ยปรับตามระยะเวลาล่าช้า (สมัครใจยื่นเอง):</span>
+                    </div>
+                    
+                    <div className="grid grid-cols-4 gap-2 text-center text-[11px] font-medium font-mono">
+                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
+                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้า 1-15 วัน</span>
+                        <span className="block font-bold text-indigo-700">
+                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 2%' : 'ลดเหลือ 10%'}
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
+                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้า 16-30 วัน</span>
+                        <span className="block font-bold text-indigo-700">
+                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 5%' : 'ลดเหลือ 20%'}
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
+                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้า 31-60 วัน</span>
+                        <span className="block font-bold text-indigo-700">
+                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 10%' : 'ลดเหลือ 30%'}
+                        </span>
+                      </div>
+                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
+                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้าเกิน 60 วัน</span>
+                        <span className="block font-bold text-indigo-700">
+                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 20%' : 'ลดเหลือ 40%'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-indigo-700/80 font-light leading-normal">
+                      💡 <em>อ้างอิงตามเกณฑ์งด/ลดเบี้ยปรับภาษีมูลค่าเพิ่มสำหรับผู้ยื่นแบบล่าช้าโดยสมัครใจของกรมสรรพากร ช่วยให้ประหยัดค่าใช้จ่ายได้สูงสุดถึง 90% ของยอดเบี้ยปรับดั้งเดิม!</em>
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* อ้างอิงทางกฎหมายของ VAT */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+                <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-1.5 text-slate-800">
+                    <BookOpen className="w-4.5 h-4.5 text-indigo-600" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider">เอกสารและระเบียบกรมสรรพากรที่เกี่ยวข้อง</h3>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-light font-mono">Official Resources</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-light leading-relaxed text-slate-600">
+                  <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-[11px] mb-1">
+                        <Building className="w-3.5 h-3.5" />
+                        <span>ระเบียบว่าด้วยการลดและงดเบี้ยปรับ</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed">
+                        ระเบียบกรมสรรพากรว่าด้วยการงดหรือลดเบี้ยปรับภาษีมูลค่าเพิ่มและภาษีธุรกิจเฉพาะ พ.ศ. 2561 และที่แก้ไขเพิ่มเติม
+                      </p>
+                    </div>
+                    <a
+                      href="https://www.rd.go.th/9880.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold pt-1 self-start"
+                    >
+                      เปิดระเบียบกรมสรรพากร (9880) <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+
+                  <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] mb-1">
+                        <Percent className="w-3.5 h-3.5" />
+                        <span>มาตราความรับผิดและเบี้ยปรับ</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed">
+                        คำอธิบายข้อกฎหมายเกี่ยวกับเกณฑ์เสียภาษีค้างชำระ อัตราเบี้ยปรับ 1 เท่า / 2 เท่า และข้อยืดหยุ่นของเงินเพิ่ม 1.5%
+                      </p>
+                    </div>
+                    <a
+                      href="https://www.rd.go.th/9881.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-800 font-semibold pt-1 self-start"
+                    >
+                      คำอธิบายกรมสรรพากร (9881) <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+
+                  <div className="space-y-1.5 p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 text-emerald-700 font-bold text-[11px] mb-1">
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>ท.ป. 200/2561 (งด/ลดเบี้ยปรับ)</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed">
+                        เกณฑ์ขอยกเว้นเบี้ยปรับแบบขั้นบันได 2% - 40% กรณีผู้เสียภาษีสมัครใจยื่นแบบเพิ่มเติมหรือล่าช้าด้วยตนเอง
+                      </p>
+                    </div>
+                    <a
+                      href="https://www.rd.go.th/3361.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-emerald-600 hover:text-emerald-800 font-semibold pt-1 self-start"
+                    >
+                      เปิดระเบียบงด/ลดเบี้ยปรับ (3361) <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* คอลัมน์ขวา: ผลการคำนวณและกราฟ (col-span-5) */}
+        <section id="results-section" className="lg:col-span-5 lg:sticky lg:top-6 space-y-6">
+          
+          {/* กล่องสรุปผลแบบบิ๊กๆ */}
+          <div className="bg-gradient-to-b from-indigo-900 to-slate-900 text-white rounded-2xl p-6 shadow-lg border border-indigo-950 space-y-5 animate-fadeIn">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-[10px] uppercase tracking-wider font-extrabold text-indigo-200">ยอดรวมทั้งหมดที่ต้องชำระ</span>
+                <div className="text-3xl md:text-4xl font-extrabold tracking-tight font-mono text-emerald-400 mt-1">
+                  <AnimatedNumber value={resultToUse.totalToPay} prefix="฿" decimals={2} />
+                </div>
+              </div>
+              <div className="px-2.5 py-1 bg-white/10 rounded-xl text-right shrink-0 border border-white/5">
+                <span className="block text-[9px] text-slate-300 font-light">ค่าปรับ & เงินเพิ่ม</span>
+                <span className="text-xs font-bold text-rose-400 font-mono">
+                  + <AnimatedNumber value={resultToUse.totalPenaltiesAndSurcharges} prefix="฿" />
+                </span>
+              </div>
+            </div>
+
+            {/* แถบสรุปแจกแจงแบบกวาดสายตา */}
+            <div className="grid grid-cols-2 gap-2 bg-black/20 p-3 rounded-xl border border-white/5 text-xs font-mono">
+              <div className="space-y-0.5">
+                <span className="text-[10px] text-slate-400 font-light block">ยอดภาษีต้นสะสม:</span>
+                <span className="text-slate-200 font-semibold">
+                  <AnimatedNumber value={resultToUse.taxOwed} prefix="฿" />
+                </span>
+              </div>
+              <div className="space-y-0.5 text-right">
+                <span className="text-[10px] text-slate-400 font-light block">รวมค่าปรับทางอาญา:</span>
+                <span className="text-indigo-300 font-semibold">
+                  <AnimatedNumber value={resultToUse.criminalFine} prefix="฿" />
+                </span>
+              </div>
+            </div>
+
+            {/* แสดงส่วนต่างกรณีได้รับความคุ้มครองยื่นเอง */}
+            {isVoluntaryResult ? (
+              <div className="p-3 bg-emerald-500/15 border border-emerald-500/25 rounded-xl flex items-start gap-2 text-xs animate-fadeIn">
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5 text-emerald-100">
+                  <span className="font-bold text-white block">ประหยัดเบี้ยปรับจากเกณฑ์ผ่อนปรน!</span>
+                  <p className="font-light leading-relaxed text-[11px]">
+                    ยื่นเพิ่มเติมสมัครใจเบี้ยปรับจึงได้รับการงดเว้นหรือลดหย่อนพิเศษเป็น <strong className="text-emerald-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong> 
+                    {activeTab === 'pit' ? ' (ประหยัดค่าปรับไปได้เต็ม 100%)' : ` (ตามเกณฑ์ลดหย่อนล่าช้า เหลือเพียง ${resultToUse.penaltyDiscountPercent}%)`} จากเดิมสูงสุดถึง <AnimatedNumber value={resultToUse.penaltyOriginal} prefix="฿" className="font-semibold" />
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-rose-500/15 border border-rose-500/25 rounded-xl flex items-start gap-2 text-xs animate-fadeIn">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5 text-rose-100">
+                  <span className="font-bold text-white block">มีเบี้ยปรับเต็มอัตราจากการประเมิน</span>
+                  <p className="font-light leading-relaxed text-[11px]">
+                    โดนเรียกปรับเนื่องจากเจ้าหน้าที่ตรวจพบประเมินภาษีเป็นจำนวน <strong className="text-rose-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong> 
+                    ({activeTab === 'pit' ? (calculationResult.penaltyMultiplier || (scenario === FilingScenario.ASSESSED_NOT_FILED ? 2 : 1)) : (vatScenario === 'assessed_not_filed' ? 2 : 1)} เท่า ลดเหลือ {resultToUse.penaltyDiscountPercent}%)
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* กราฟเปรียบเทียบสัดส่วนภาษี */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+              <span className="text-xs font-bold text-slate-900 block">กราฟฟิกแสดงสัดส่วนโครงสร้างหนี้ภาษี</span>
+              <span className="text-[10px] text-slate-400 font-light font-mono">Interactive Chart</span>
+            </div>
+            
+            <TaxDonutChart
+              tax={resultToUse.taxOwed}
+              surcharge={resultToUse.surcharge}
+              criminalFine={resultToUse.criminalFine}
+              penalty={resultToUse.penaltyReduced}
+            />
+          </div>
+
+          {/* รายละเอียดบิลค่าปรับแบบชำแหละ */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+            <div className="flex items-center gap-1.5 pb-2 border-b border-slate-100">
+              <Clock className="w-4 h-4 text-indigo-600" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">แจกแจงสูตรคำนวณอย่างย่อ</h3>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              
+              {/* รายการ 1: ภาษีหลัก */}
+              <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-slate-800 block">1. ภาษีค้างชำระหลัก</span>
+                  <span className="text-[10px] text-slate-400 font-light leading-tight block">
+                    ยอดเงินภาษีที่จ่ายไม่ครบถ้วนตามความจริง
+                  </span>
+                </div>
+                <span className="font-semibold text-slate-800 font-mono">
+                  <AnimatedNumber value={resultToUse.taxOwed} prefix="฿" />
+                </span>
+              </div>
+
+              {/* รายการ 2: ค่าปรับอาญา */}
+              <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-slate-800 block">2. ค่าปรับอาญา (ล่าช้า)</span>
+                  <span className="text-[10px] text-slate-400 font-light leading-tight block">
+                    {activeTab === 'pit' 
+                      ? (scenario === FilingScenario.VOLUNTARY
+                          ? (resultToUse.monthsLate === 0
+                              ? 'ยื่นในเวลาปกติ (ไม่มีค่าปรับ)'
+                              : `ล่าช้าเกินกำหนดปฏิทิน: ปรับ ${resultToUse.criminalFine.toLocaleString()} บาท`)
+                          : 'สรรพากรประเมิน: ปรับอัตราเต็ม 2,000 บาท')
+                      : (isVoluntaryResult
+                          ? (resultToUse.monthsLate === 0
+                              ? 'ยื่นในเวลาปกติ (ไม่มีค่าปรับ)'
+                              : `ปรับยื่นแบบล่าช้า (ภ.พ.30) ตามจริง: ปรับ ${resultToUse.criminalFine.toLocaleString()} บาท`)
+                          : `สรรพากรประเมิน: ปรับล่าช้าสูงสุด ${resultToUse.criminalFine.toLocaleString()} บาท`)
+                    }
+                  </span>
+                </div>
+                <span className="font-semibold text-indigo-600 font-mono">
+                  <AnimatedNumber value={resultToUse.criminalFine} prefix="฿" />
+                </span>
+              </div>
+
+              {/* รายการ 3: เงินเพิ่ม */}
+              <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-slate-800 block">3. เงินเพิ่มสะสม (ม. 27)</span>
+                  <span className="text-[10px] text-slate-400 font-light leading-tight block">
+                    {resultToUse.monthsLate === 0 
+                      ? 'ไม่มีเงินเพิ่มสะสม' 
+                      : `คิด 1.5% ต่อเดือน x ${resultToUse.monthsLate} เดือน = ${(1.5 * resultToUse.monthsLate).toFixed(1)}%`}
+                    {resultToUse.surcharge === resultToUse.taxOwed && ' (เต็มเพดานสูงสุด 100% ของตัวภาษีแล้ว)'}
+                  </span>
+                </div>
+                <span className="font-semibold text-amber-600 font-mono">
+                  <AnimatedNumber value={resultToUse.surcharge} prefix="฿" />
+                </span>
+              </div>
+
+              {/* รายการ 4: เบี้ยปรับ */}
+              <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-slate-800 block">4. ค่าเบี้ยปรับ (ม. 22)</span>
+                  <span className="text-[10px] text-slate-400 font-light leading-tight block">
+                    {activeTab === 'pit'
+                      ? (scenario === FilingScenario.VOLUNTARY 
+                          ? 'ยื่นเพิ่มเติมด้วยตนเอง: งดเว้นเบี้ยปรับ (0%)' 
+                          : `คิดจากยอดประเมิน ${scenario === FilingScenario.ASSESSED_NOT_FILED ? '2' : '1'} เท่า ลดเหลือ ${resultToUse.penaltyDiscountPercent}%`)
+                      : (isVoluntaryResult
+                          ? `ผ่อนผันการยื่นแบบด้วยตนเองล่าช้า: ลดหย่อนเหลือ ${resultToUse.penaltyDiscountPercent}% จากเดิมสูงสุด`
+                          : `คิดจากการตรวจประเมินของเจ้าหน้าที่ ${vatScenario === 'assessed_not_filed' ? '2' : '1'} เท่า ลดเหลือ ${resultToUse.penaltyDiscountPercent}%`)
+                    }
+                  </span>
+                </div>
+                <span className="font-semibold text-rose-600 font-mono">
+                  <AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" />
+                </span>
+              </div>
+
+            </div>
+
+            {/* เครื่องมือจัดการข้อมูลและพิมพ์รายงาน */}
+            <div className="pt-3 border-t border-slate-100/80 no-print">
+              <button
+                type="button"
+                onClick={handleCopySummary}
+                className={`w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-[11px] font-semibold border transition-all cursor-pointer ${
+                  copied
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-white text-indigo-700 border-indigo-100 hover:bg-indigo-50/50 hover:border-indigo-200 shadow-sm'
+                }`}
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? 'คัดลอกสำเร็จ!' : 'คัดลอกสรุปข้อความ'}
+              </button>
+            </div>
+
+            {/* ปุ่มเปิดความรู้ภาษีเพิ่มเติม */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowFormulaInfo(!showFormulaInfo)}
+                className="w-full flex items-center justify-between p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-slate-500 hover:text-slate-800 text-[11px] font-semibold transition-colors"
+              >
+                <span>💡 วิธีการและสูตรคำนวณเบื้องหลัง</span>
+                <ChevronRight className={`w-4 h-4 transition-transform ${showFormulaInfo ? 'rotate-90' : ''}`} />
+              </button>
+
+              <AnimatePresence>
+                {showFormulaInfo && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="overflow-hidden bg-slate-50/50 p-3 rounded-b-xl border-x border-b border-slate-100 text-[10px] text-slate-500 space-y-2 leading-relaxed"
+                  >
+                    <p>
+                      <strong>ค่าภาษีต้น</strong>: คิดเงินได้สุทธิ = รายได้สะสม - ค่าใช้จ่าย - ค่าลดหย่อน แล้วนำไปคูณอัตราภาษีแบบก้าวหน้าของประเทศไทย (5% - 35%)
+                    </p>
+                    <p>
+                      <strong>สูตรเงินเพิ่มสะสม</strong>: <code className="bg-slate-100 px-1 rounded font-mono text-slate-700">ภาษีค้าง × 1.5% × จำนวนเดือนล่าช้า</code> โดยเศษของเดือนให้ปัดเป็น 1 เดือน และเพดานสูงสุดห้ามนำส่งเงินเพิ่มเกินตัวเงินภาษีค้างหลัก
+                    </p>
+                    <p>
+                      <strong>สูตรเบี้ยปรับ</strong>: <code className="bg-slate-100 px-1 rounded font-mono text-slate-700">ภาษีค้าง × อัตราเบี้ยปรับตามประเมิน × เปอร์เซ็นต์หลังลดหย่อน</code>
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+
+          {/* ป้ายเตือนหรือข้อเสนอแนะเพิ่มเติม */}
+          {taxOwedToUse > 0 && scenario !== FilingScenario.VOLUNTARY && (
+            <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200/80 flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="text-xs font-bold text-amber-900 block">คำเตือนทางเลือกสรรพากร</span>
+                <p className="text-[11px] text-amber-800 font-light leading-relaxed">
+                  หากตรวจพบเจอข้อมูลรายได้ผิดพลาดหรือตกหล่น แนะนำให้รีบทำการ <strong>"ยื่นเพิ่มเติมด้วยตนเอง" (Voluntary)</strong> ก่อนที่เจ้าหน้าที่สรรพากรจะมีจดหมายส่งมาแจ้งประเมิน เพื่อรับสิทธิ์ยกเว้นเบี้ยปรับ (0%) และเสียเฉพาะเงินเพิ่มล่าช้า 1.5% ต่อเดือนเท่านั้น!
+                </p>
+              </div>
+            </div>
+          )}
+
+        </section>
+
+      </main>
+
+      {/* ส่วนท้ายกระดาษ (Footer) */}
+      <footer className="bg-slate-900 text-slate-400 text-center py-5 border-t border-slate-800 text-xs shrink-0 mt-8">
+        <div className="max-w-7xl mx-auto px-4 space-y-1">
+          <p className="font-light">
+            แอปพลิเคชันนี้ทำหน้าที่ช่วยประเมินและอำนวยความสะดวกในการจัดสรรคำนวณเบื้องต้นเท่านั้น 
+            การประเมินทางกฎหมายและยอดชำระจริงจะขึ้นอยู่กับดุลยพินิจและระบบของกรมสรรพากรโดยตรง
+          </p>
+          <div className="flex justify-center items-center gap-4 text-[10px] text-slate-500 pt-1">
+            <a href="https://www.rd.go.th" target="_blank" rel="noopener noreferrer" className="hover:text-slate-300 flex items-center gap-0.5">
+              เว็บไซต์กรมสรรพากร <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+            <span>•</span>
+            <span>ปีลิขสิทธิ์ความคุ้มครอง © 2569</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* Print Preview & Export Modal */}
+      <AnimatePresence>
+        {showPrintModal && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh] border border-slate-100"
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-slate-900 to-indigo-950 p-5 text-white flex justify-between items-center shrink-0">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-indigo-400" />
+                  <div className="text-left">
+                    <h3 className="font-bold text-sm tracking-tight">รายงานประเมินภาษีและค่าปรับแบบเป็นทางการ</h3>
+                    <p className="text-[10px] text-slate-300 font-light">ข้อมูลประเมินเบื้องต้น ณ วันที่ {formatThaiDate(paymentDate)}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPrintModal(false)}
+                  className="p-1.5 hover:bg-white/10 rounded-xl transition-colors cursor-pointer text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Notice Bar for iFrame limits */}
+              <div className="bg-amber-50 border-b border-amber-100 p-4 text-amber-900 text-xs flex items-start gap-2.5 text-left">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="font-bold block">💡 เคล็ดลับการสั่งพิมพ์หรือบันทึก PDF:</span>
+                  <p className="text-[11px] leading-relaxed font-light text-amber-800">
+                    เนื่องจากแอปพลิเคชันกำลังทำงานอยู่ในโหมดจำลอง (iFrame Sandbox) ของ Google AI Studio 
+                    หากปุ่มพิมพ์ด้านล่างไม่แสดงผลการพิมพ์หรือบันทึก PDF ของเบราว์เซอร์ 
+                    <strong>แนะนำให้กดปุ่มคัดลอกสรุปข้อความ หรือกดปุ่ม "เปิดในแท็บใหม่"</strong> ที่หน้าต่าง AI Studio ด้านบนเพื่อเข้าใช้แอปในลิงก์จริง แล้วทำการสั่งพิมพ์/เซฟ PDF ได้ทันทีอย่างมีประสิทธิภาพสูงสุด!
+                  </p>
+                </div>
+              </div>
+
+              {/* Receipt Area (This is what will be printed if window.print() is called) */}
+              <div id="printable-receipt" className="p-6 overflow-y-auto space-y-6 flex-1 text-slate-800 bg-slate-50/50">
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6 relative overflow-hidden text-left">
+                  
+                  {/* Decorative badge watermarked */}
+                  <div className="absolute top-2 right-2 border-2 border-emerald-500/30 text-emerald-600/40 font-extrabold uppercase text-[10px] tracking-widest py-1 px-3 rounded-xl rotate-12">
+                    UNOFFICIAL ASSESSMENT
+                  </div>
+
+                  {/* Receipt Header */}
+                  <div className="text-center pb-4 border-b border-dashed border-slate-200">
+                    <Building className="w-10 h-10 text-indigo-600 mx-auto mb-2" />
+                    <h2 className="text-base font-bold text-slate-900">สรุปรายงานประเมินภาระภาษีล่าช้า ({activeTab === 'pit' ? 'ภ.ง.ด.90/91' : 'ภ.พ.30'})</h2>
+                    <p className="text-[10px] text-slate-500 mt-1">ประเมินผลสำหรับ ปีภาษี พ.ศ. {yearThToUse}</p>
+                    <div className="text-[9px] text-slate-400 mt-1 flex justify-center items-center gap-2">
+                      <span>ประเภท: {scenarioLabelResult}</span>
+                      <span>•</span>
+                      <span>ช่องทาง: {filingMethodToUse === FilingMethod.ONLINE ? 'ออนไลน์' : 'ยื่นกระดาษ'}</span>
+                    </div>
+                  </div>
+
+                  {/* Metadata fields */}
+                  <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block text-[9px]">กำหนดชำระปกติ:</span>
+                      <span className="font-semibold text-slate-700">{formatThaiDate(deadlineToUse)}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[9px]">วันที่คาดว่าจะชำระจริง:</span>
+                      <span className="font-semibold text-slate-700">{formatThaiDate(paymentDateToUse)}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[9px]">จำนวนเดือนที่ล่าช้า:</span>
+                      <span className="font-semibold text-indigo-700">{resultToUse.monthsLate} เดือน</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[9px]">เบี้ยปรับตามเงื่อนไข:</span>
+                      <span className="font-semibold text-rose-600">{resultToUse.penaltyDiscountPercent}%</span>
+                    </div>
+                  </div>
+
+                  {/* Calculations Details Table */}
+                  <div className="space-y-2.5 text-xs">
+                    <span className="font-bold text-slate-900 text-[11px] block">รายละเอียดภาระภาษีทั้งหมด</span>
+                    
+                    {/* Item 1 */}
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
+                      <span className="text-slate-600">1. ยอดภาษีต้นค้างชำระ (Tax Owed)</span>
+                      <span className="font-mono font-semibold text-slate-800">
+                        ฿{resultToUse.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    {/* Item 2 */}
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
+                      <div>
+                        <span className="text-slate-600">2. ค่าปรับอาญาล่าช้า (Criminal Fine)</span>
+                        <span className="text-[9px] text-slate-400 block font-light">
+                          {activeTab === 'pit' ? 'สูงสุด 2,000 บาทตามกฎหมาย' : 'อัตราคงที่ 100-200 บาทสำหรับ ภ.พ.30'}
+                        </span>
+                      </div>
+                      <span className="font-mono font-semibold text-indigo-600">
+                        ฿{resultToUse.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    {/* Item 3 */}
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
+                      <div>
+                        <span className="text-slate-600">3. เงินเพิ่มสะสม (Surcharge) ม. 27</span>
+                        <span className="text-[9px] text-slate-400 block font-light">อัตรา 1.5% ต่อเดือน (คำนวณ {resultToUse.monthsLate} เดือน)</span>
+                      </div>
+                      <span className="font-mono font-semibold text-amber-600">
+                        ฿{resultToUse.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    {/* Item 4 */}
+                    <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
+                      <div>
+                        <span className="text-slate-600">4. เบี้ยปรับ (Penalty) ม. 22</span>
+                        <span className="text-[9px] text-slate-400 block font-light">
+                          {isVoluntaryResult 
+                            ? `ยื่นเพิ่มสมัครใจ: ลดหย่อนเหลือ ${resultToUse.penaltyDiscountPercent}%` 
+                            : `อัตราลดเหลือ ${resultToUse.penaltyDiscountPercent}% จากเดิมสูงสุด`}
+                        </span>
+                      </div>
+                      <span className="font-mono font-semibold text-rose-600">
+                        ฿{resultToUse.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    {/* Total */}
+                    <div className="flex justify-between items-center pt-3 pb-1 border-t border-slate-300 font-extrabold text-sm text-slate-900">
+                      <span>ยอดรวมที่ต้องชำระสะสม (Total)</span>
+                      <span className="font-mono text-emerald-600">
+                        ฿{resultToUse.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+
+                    {/* Savings Notification */}
+                    <div className="bg-emerald-50 text-emerald-800 text-[10px] p-2.5 rounded-xl border border-emerald-100 flex items-center gap-1.5 mt-2">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>
+                        คุณประหยัดเงินค่าปรับไปได้ <strong>฿{(resultToUse.penaltyOriginal - resultToUse.penaltyReduced).toLocaleString()}</strong> บาท จากการลดหย่อน/ยกเว้นตามกฎระเบียบ
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Stamp & Footer */}
+                  <div className="pt-4 border-t border-dashed border-slate-200 flex justify-between items-end">
+                    <div className="text-[9px] text-slate-400 leading-relaxed font-light">
+                      * คำนวณเบื้องต้นเพื่ออำนวยความสะดวกเท่านั้น<br />
+                      * โปรดตรวจสอบยอดอย่างเป็นทางการกับระบบยื่นแบบสรรพากรอีกครั้ง
+                    </div>
+                    <div className="text-center">
+                      <div className="w-20 h-1 bg-slate-200 mx-auto mb-1"></div>
+                      <span className="text-[8px] text-slate-400 block">ผู้ตรวจสอบข้อมูล</span>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="p-4 bg-slate-100 border-t border-slate-200/80 flex flex-col md:flex-row gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDownloadImage}
+                  disabled={exporting}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Download className={`w-4 h-4 ${exporting ? 'animate-bounce' : ''}`} />
+                  {exporting ? 'กำลังประมวลผลรูปภาพ...' : 'ดาวน์โหลดรายงาน (รูปภาพ PNG)'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.print();
+                  }}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-md transition-all cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  สั่งพิมพ์ / เซฟ PDF (เบราว์เซอร์)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopySummary}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 px-4 border rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    copied
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                  {copied ? 'คัดลอกสำเร็จ!' : 'คัดลอกสรุปข้อความ'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPrintModal(false)}
+                  className="py-2.5 px-4 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer md:shrink-0"
+                >
+                  ปิด
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
