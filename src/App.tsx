@@ -33,11 +33,14 @@ import {
   FilingMethod,
   FilingScenario,
   PenaltyReduction,
+  VatAssessedReduction,
   IncomeEstimation,
 } from './types';
 
 import {
   TAX_YEARS,
+  LEGAL_BASIS,
+  PIT_CRIMINAL_FINE_MAX,
   calculateTaxPenalties,
   estimateMissingTax,
   calculateProgressiveTax,
@@ -45,9 +48,50 @@ import {
   getVatDeadline
 } from './utils/taxCalc';
 
+// แปลงข้อความตัวเลขที่ผู้ใช้กรอก (มีคอมม่าได้) เป็นจำนวน ถ้าว่าง/ไม่ใช่ตัวเลข = 0
+const parseMoney = (value: string): number => {
+  const n = parseFloat(value.replace(/,/g, ''));
+  return isNaN(n) || n < 0 ? 0 : n;
+};
+
 import TaxDonutChart from './components/TaxDonutChart';
 import ProgressiveTaxBar from './components/ProgressiveTaxBar';
 import { AnimatedNumber } from './components/AnimatedNumber';
+
+// ช่องกรอกค่าปรับอาญา: กรมสรรพากรไม่ได้ประกาศตารางตายตัว ให้กรอกตามจำนวนที่สรรพากรแจ้งจริง
+function CriminalFineField({
+  value,
+  onChange,
+  applies,
+  max,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  applies: boolean;
+  max: number | null;
+}) {
+  if (!applies) return null;
+  return (
+    <div className="space-y-1.5 p-3 bg-amber-50/50 border border-amber-100 rounded-xl">
+      <label className="text-xs font-semibold text-slate-700 block">
+        ค่าปรับอาญา (ถ้ามีแจ้งจากสรรพากร) — บาท
+      </label>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={value}
+        placeholder="เว้นว่าง = ยังไม่รวมในยอด"
+        onChange={(e) => onChange(e.target.value.replace(/[^0-9.,]/g, ''))}
+        className="w-full bg-white border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
+      />
+      <p className="text-[10px] text-slate-500 font-light leading-relaxed">
+        {max !== null
+          ? `ตามมาตรา 35 ปรับไม่เกิน ${max.toLocaleString()} บาท และกรมสรรพากรไม่ได้ประกาศอัตราตายตัว จึงใช้จำนวนที่เจ้าหน้าที่แจ้งหรือเปรียบเทียบปรับจริง (ระบบจะไม่เกินเพดาน)`
+          : 'กรมสรรพากรไม่ได้ประกาศอัตราตายตัวที่ยืนยันได้ จึงใช้จำนวนที่เจ้าหน้าที่แจ้งหรือเปรียบเทียบปรับจริง'}
+      </p>
+    </div>
+  );
+}
 
 export default function App() {
   // แท็บที่เลือกใช้งาน: ภาษีเงินได้บุคคลธรรมดา (pit) หรือ ภาษีมูลค่าเพิ่ม (vat)
@@ -76,7 +120,11 @@ export default function App() {
   const [taxYearTh, setTaxYearTh] = useState<number>(2568);
   const [filingMethod, setFilingMethod] = useState<FilingMethod>(FilingMethod.ONLINE);
   const [scenario, setScenario] = useState<FilingScenario>(FilingScenario.VOLUNTARY);
-  const [reduction, setReduction] = useState<PenaltyReduction>(PenaltyReduction.WITHIN_30_DAYS);
+  const [reduction, setReduction] = useState<PenaltyReduction>(PenaltyReduction.NO_REDUCTION);
+  // ค่าปรับอาญาตามที่สรรพากรแจ้ง (ไม่มีตารางตายตัว จึงให้ผู้ใช้กรอกเอง; เว้นว่าง = ยังไม่รวมในยอด)
+  const [pitCriminalFineInput, setPitCriminalFineInput] = useState<string>('');
+  const [vatCriminalFineInput, setVatCriminalFineInput] = useState<string>('');
+  const [vatAssessedReduction, setVatAssessedReduction] = useState<VatAssessedReduction>('NONE');
   
   // วันที่คาดว่าจะยื่นชำระจริง (Default เป็นวันนี้ 2026-06-29 ตาม metadata)
   const [paymentDate, setPaymentDate] = useState<string>('2026-06-29');
@@ -142,7 +190,7 @@ export default function App() {
 วันที่คาดว่าจะยื่นชำระจริง: ${formatThaiDate(paymentDate)}
 -----------------------------------------
 1. ยอดภาษีค้างชำระหลัก: ฿${calculationResult.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-2. รวมค่าปรับทางอาญา: ฿${calculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+2. ค่าปรับทางอาญา: ${calculationResult.criminalFineApplies && calculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ไม่เกิน 2,000 บาท ตาม ม.35 ตามที่สรรพากรแจ้ง)' : `฿${calculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
 3. เงินเพิ่มสะสม (ม. 27): ฿${calculationResult.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${calculationResult.monthsLate === 0 ? '0' : (1.5 * calculationResult.monthsLate).toFixed(1)}% ต่อเดือน)
 4. ค่าเบี้ยปรับ (ม. 22): ฿${calculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (ลดจากยอดเต็ม ฿${calculationResult.penaltyOriginal.toLocaleString()} คงเหลือ ${calculationResult.penaltyDiscountPercent}%)
 -----------------------------------------
@@ -173,9 +221,9 @@ export default function App() {
 วันที่คาดว่าจะยื่นชำระจริง: ${formatThaiDate(vatPaymentDate)}
 -----------------------------------------
 1. ยอดภาษี VAT ค้างชำระหลัก: ฿${vatCalculationResult.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-2. รวมค่าปรับทางอาญา: ฿${vatCalculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+2. ค่าปรับทางอาญา: ${vatCalculationResult.criminalFineApplies && vatCalculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ตามที่สรรพากรแจ้ง)' : `฿${vatCalculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
 3. เงินเพิ่มสะสม (1.5% ต่อเดือน): ฿${vatCalculationResult.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-4. ค่าเบี้ยปรับ (ภ.พ.30): ฿${vatCalculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (อัตราเบี้ยปรับยื่นล่าช้าเสียจริง ${vatCalculationResult.penaltyPercentApplied}% ของยอดภาษี จากอัตราสูงสุดเต็ม)
+4. ค่าเบี้ยปรับ (ภ.พ.30): ฿${vatCalculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (เบี้ยปรับตามกฎหมาย ${vatCalculationResult.penaltyMultiplier} เท่า ฿${vatCalculationResult.penaltyOriginal.toLocaleString()} เหลือเสียจริง ${vatCalculationResult.penaltyDiscountPercent}% ตาม ท.ป. 81/2542 ข้อ 5)
 -----------------------------------------
 💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${vatCalculationResult.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 🎉 ประหยัดเบี้ยปรับไปได้: ฿${(vatCalculationResult.penaltyOriginal - vatCalculationResult.penaltyReduced).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
@@ -247,9 +295,10 @@ export default function App() {
       filingMethod,
       scenario,
       reduction,
-      paymentDate
+      paymentDate,
+      parseMoney(pitCriminalFineInput)
     );
-  }, [taxOwedToUse, taxYearTh, filingMethod, scenario, reduction, paymentDate]);
+  }, [taxOwedToUse, taxYearTh, filingMethod, scenario, reduction, paymentDate, pitCriminalFineInput]);
 
   // === สำหรับหน้าภาษีมูลค่าเพิ่ม (VAT) ===
   const vatEstimationResult = useMemo(() => {
@@ -297,9 +346,11 @@ export default function App() {
       vatYearTh,
       vatFilingMethod,
       vatScenario,
-      vatPaymentDate
+      vatPaymentDate,
+      parseMoney(vatCriminalFineInput),
+      vatAssessedReduction
     );
-  }, [vatOwedToUse, vatMonth, vatYearTh, vatFilingMethod, vatScenario, vatPaymentDate]);
+  }, [vatOwedToUse, vatMonth, vatYearTh, vatFilingMethod, vatScenario, vatPaymentDate, vatCriminalFineInput, vatAssessedReduction]);
 
   const vatDeadline = useMemo(() => {
     return getVatDeadline(vatMonth, vatYearTh, vatFilingMethod);
@@ -527,6 +578,13 @@ export default function App() {
               </div>
             </div>
 
+            <CriminalFineField
+              value={pitCriminalFineInput}
+              onChange={setPitCriminalFineInput}
+              applies={calculationResult.criminalFineApplies}
+              max={PIT_CRIMINAL_FINE_MAX}
+            />
+
             {/* กรณีการยื่นภาษี */}
             <div className="space-y-2 pt-1">
               <label className="text-xs font-semibold text-slate-600 block">
@@ -581,7 +639,7 @@ export default function App() {
                   <div className="mt-2.5">
                     <span className="block text-xs font-bold text-slate-900">ยื่นแบบไว้แต่ไม่ครบ</span>
                     <span className="block text-[10px] text-slate-500 font-light mt-0.5">
-                      เบี้ยปรับ 1 เท่า (100%), เงินเพิ่ม 1.5% และค่าปรับอาญาเต็มอัตรา
+                      เบี้ยปรับ 1 เท่า (ลดได้ไม่ต่ำกว่า 50%), เงินเพิ่ม 1.5% และค่าปรับอาญาตามที่สรรพากรแจ้ง
                     </span>
                   </div>
                 </button>
@@ -607,7 +665,7 @@ export default function App() {
                   <div className="mt-2.5">
                     <span className="block text-xs font-bold text-slate-900">ไม่ได้ยื่นแบบเลย</span>
                     <span className="block text-[10px] text-slate-500 font-light mt-0.5">
-                      เบี้ยปรับ 2 เท่า (200%), เงินเพิ่ม 1.5% และค่าปรับอาญาเต็มอัตรา
+                      เบี้ยปรับ 2 เท่า (ลดได้ไม่ต่ำกว่า 50%), เงินเพิ่ม 1.5% และค่าปรับอาญาตามที่สรรพากรแจ้ง
                     </span>
                   </div>
                 </button>
@@ -871,8 +929,8 @@ export default function App() {
                     <span>มาตรา 35 (ค่าปรับอาญา)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับสูงสุดไม่เกิน 2,000 บาท 
-                    (ลดหย่อนเหลือ 100/200 บาทตามกรอบวันล่าช้า)
+                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับไม่เกิน {PIT_CRIMINAL_FINE_MAX.toLocaleString()} บาท
+                    ขอลดค่าปรับได้ (จำนวนจริงเป็นไปตามที่เจ้าหน้าที่แจ้ง)
                   </p>
                 </div>
                 <a
@@ -892,7 +950,7 @@ export default function App() {
                     <span>มาตรา 27 (เงินเพิ่มสะสม)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    ต้องรับผิดเสียเงินเพิ่มร้อยละ 1.5 ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน) 
+                    ต้องรับผิดเสียเงินเพิ่มร้อยละ 1.5 ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน)
                     ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีต้น (อธิบดีไม่มีอำนาจงด/ลด)
                   </p>
                 </div>
@@ -910,106 +968,53 @@ export default function App() {
             <div className="space-y-2">
               <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                อัตราการขอลดหย่อนเบี้ยปรับ (ตามกรอบเวลาชำระนับแต่วันที่ได้รับคำเตือน)
+                การลดเบี้ยปรับ (ม. 22 / ม. 26) ตามดุลพินิจเจ้าพนักงานประเมิน
               </label>
-              <p className="text-[11px] text-slate-400 font-light leading-relaxed">
-                หากยื่นแบบล่าช้าจากการโดนประเมิน/ตักเตือน เจ้าหน้าที่มีสิทธิ์ลดอัตราเบี้ยปรับ (เบี้ยปรับ 1-2 เท่า) ตามกรอบเวลาที่ท่านไปเข้าชำระจริง
+              <p className="text-[11px] text-slate-500 font-light leading-relaxed">
+                ตามคำสั่งกรมสรรพากร ท.ป. 81/2542 ข้อ 4 เจ้าพนักงานประเมินลดเบี้ยปรับภาษีเงินได้ได้ตามดุลพินิจ
+                แต่ต้องให้เสียไม่น้อยกว่า 50% ของเบี้ยปรับ (ไม่มีตารางลดตามช่วงวันที่ชำระ)
+                และต้องยื่นคำร้องขอลดก่อนมีหนังสือแจ้งการประเมิน
               </p>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                {/* ย่อยภายใน 30 วัน */}
                 <button
                   type="button"
-                  onClick={() => setReduction(PenaltyReduction.WITHIN_30_DAYS)}
+                  onClick={() => setReduction(PenaltyReduction.NO_REDUCTION)}
                   className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
-                    reduction === PenaltyReduction.WITHIN_30_DAYS
+                    reduction === PenaltyReduction.NO_REDUCTION
                       ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
                       : 'border-slate-200 bg-white hover:border-slate-300'
                   }`}
                 >
                   <div className="space-y-0.5">
-                    <span className="block text-xs font-bold">ภายใน 30 วัน</span>
+                    <span className="block text-xs font-bold">ยังไม่ได้รับการลด (เต็ม 100%)</span>
                     <span className="block text-[10px] text-slate-400 font-light">
-                      ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 20%
+                      ยอดสูงสุดตามกฎหมาย ใช้เป็นกรณีเลวร้ายที่สุด
                     </span>
                   </div>
-                  {reduction === PenaltyReduction.WITHIN_30_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                  {reduction === PenaltyReduction.NO_REDUCTION && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
                 </button>
 
-                    {/* ย่อยภายใน 31-60 วัน */}
-                    <button
-                      type="button"
-                      onClick={() => setReduction(PenaltyReduction.WITHIN_60_DAYS)}
-                      className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
-                        reduction === PenaltyReduction.WITHIN_60_DAYS
-                          ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <span className="block text-xs font-bold">ภายใน 31 - 60 วัน</span>
-                        <span className="block text-[10px] text-slate-400 font-light">
-                          ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 25%
-                        </span>
-                      </div>
-                      {reduction === PenaltyReduction.WITHIN_60_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
-                    </button>
-
-                    {/* ย่อยภายใน 61-90 วัน */}
-                    <button
-                      type="button"
-                      onClick={() => setReduction(PenaltyReduction.WITHIN_90_DAYS)}
-                      className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
-                        reduction === PenaltyReduction.WITHIN_90_DAYS
-                          ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <span className="block text-xs font-bold">ภายใน 61 - 90 วัน</span>
-                        <span className="block text-[10px] text-slate-400 font-light">
-                          ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 30%
-                        </span>
-                      </div>
-                      {reduction === PenaltyReduction.WITHIN_90_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
-                    </button>
-
-                    {/* ย่อยเกิน 90 วัน */}
-                    <button
-                      type="button"
-                      onClick={() => setReduction(PenaltyReduction.OVER_90_DAYS)}
-                      className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
-                        reduction === PenaltyReduction.OVER_90_DAYS
-                          ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <span className="block text-xs font-bold">เกิน 90 วันขึ้นไป</span>
-                        <span className="block text-[10px] text-slate-400 font-light">
-                          ลดเบี้ยปรับเต็มจำนวน เหลือเพียง 50%
-                        </span>
-                      </div>
-                      {reduction === PenaltyReduction.OVER_90_DAYS && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
-                    </button>
-
+                <button
+                  type="button"
+                  onClick={() => setReduction(PenaltyReduction.REDUCED_50)}
+                  className={`p-3 text-left rounded-xl border flex items-center justify-between transition-all ${
+                    reduction === PenaltyReduction.REDUCED_50
+                      ? 'border-indigo-500 bg-indigo-50/20 text-indigo-950 font-bold'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <div className="space-y-0.5">
+                    <span className="block text-xs font-bold">ได้รับอนุมัติลดสูงสุด (เหลือ 50%)</span>
+                    <span className="block text-[10px] text-slate-400 font-light">
+                      เจ้าพนักงานอนุมัติลดเต็มที่ตามข้อ 4
+                    </span>
                   </div>
-                </div>
+                  {reduction === PenaltyReduction.REDUCED_50 && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                </button>
+              </div>
+            </div>
 
-                {/* ตัวเลือกจ่ายยอดเต็ม */}
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setReduction(PenaltyReduction.NO_REDUCTION)}
-                    className={`w-full p-2.5 text-center text-xs font-semibold rounded-xl border transition-all ${
-                      reduction === PenaltyReduction.NO_REDUCTION
-                        ? 'border-slate-600 bg-slate-800 text-white'
-                        : 'border-slate-200 bg-white text-slate-600 hover:text-slate-800 hover:bg-slate-50'
-                    }`}
-                  >
-                    {reduction === PenaltyReduction.NO_REDUCTION ? '✓ เลือกชำระเบี้ยปรับอัตราเต็ม (ไม่ยื่นขอลดหย่อน)' : 'ชำระเบี้ยปรับอัตราเต็ม (ไม่ยื่นขอลดหย่อน) — 100%'}
-                  </button>
-                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1032,8 +1037,8 @@ export default function App() {
                     <span>มาตรา 35 (ค่าปรับอาญา)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับสูงสุดไม่เกิน 2,000 บาท 
-                    (ลดหย่อนเหลือ 100/200 บาทตามกรอบวันล่าช้า)
+                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับไม่เกิน {PIT_CRIMINAL_FINE_MAX.toLocaleString()} บาท
+                    ขอลดค่าปรับได้ (จำนวนจริงเป็นไปตามที่เจ้าหน้าที่แจ้ง)
                   </p>
                 </div>
                 <a
@@ -1201,6 +1206,13 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              <CriminalFineField
+                value={vatCriminalFineInput}
+                onChange={setVatCriminalFineInput}
+                applies={vatCalculationResult.criminalFineApplies}
+                max={null}
+              />
 
               {/* ยอดเงินภาษีค้างชำระของ VAT */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
@@ -1485,7 +1497,7 @@ export default function App() {
                       {vatScenario === 'voluntary_additional' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
                     </div>
                     <p className="text-[10px] text-slate-400 font-light leading-relaxed">
-                      เคยยื่นแบบไว้แล้วแต่ไม่ครบถ้วน สมัครใจยื่นแบบเพิ่มเติมด้วยตัวเอง <strong>(เบี้ยปรับเต็ม 1 เท่า ได้รับยกเว้นเหลือตามเกณฑ์ 2% - 20%)</strong>
+                      เคยยื่นแบบไว้แล้วแต่ไม่ครบถ้วน สมัครใจยื่นแบบเพิ่มเติมด้วยตัวเอง <strong>(เบี้ยปรับ 1 เท่า ลดเหลือ 2% - 20% ของเบี้ยปรับ ตามจำนวนวันที่ช้า)</strong>
                     </p>
                   </button>
 
@@ -1504,7 +1516,7 @@ export default function App() {
                       {vatScenario === 'voluntary_late' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
                     </div>
                     <p className="text-[10px] text-slate-400 font-light leading-relaxed">
-                      ไม่เคยยื่นแบบรายเดือนนั้นมาก่อน สมัครใจเข้ายื่นแบบย้อนหลังล่าช้าด้วยตัวเอง <strong>(เบี้ยปรับเต็ม 2 เท่า ได้รับยกเว้นเหลือตามเกณฑ์ 10% - 40%)</strong>
+                      ไม่เคยยื่นแบบรายเดือนนั้นมาก่อน สมัครใจเข้ายื่นแบบย้อนหลังล่าช้าด้วยตัวเอง <strong>(เบี้ยปรับ 2 เท่า ลดเหลือ 2% - 20% ของเบี้ยปรับ = 4% - 40% ของภาษี)</strong>
                     </p>
                   </button>
 
@@ -1523,7 +1535,7 @@ export default function App() {
                       {vatScenario === 'assessed_incorrect' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
                     </div>
                     <p className="text-[10px] text-slate-400 font-light leading-relaxed">
-                      เคยยื่นไว้ไม่ครบถ้วน จนกระทั่งถูกสรรพากรตรวจสอบพบและมีหนังสือประเมินภาษี <strong>(เสียเบี้ยปรับเต็มอัตราตามจริง 1 เท่า หรือ 100%)</strong>
+                      เคยยื่นไว้ไม่ครบถ้วน จนกระทั่งถูกสรรพากรตรวจสอบพบและมีหนังสือประเมินภาษี <strong>(เบี้ยปรับ 1 เท่า เต็มอัตรา หรือลดเหลือ 40%/50% ตามดุลพินิจ)</strong>
                     </p>
                   </button>
 
@@ -1542,48 +1554,76 @@ export default function App() {
                       {vatScenario === 'assessed_not_filed' && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
                     </div>
                     <p className="text-[10px] text-slate-400 font-light leading-relaxed">
-                      ไม่ได้ยื่นแบบแสดงรายการเลยจนถูกตรวจพบ และมีหนังสือประเมินภาษีย้อนหลัง <strong>(เสียเบี้ยปรับเต็มอัตราสูงสุดตามจริง 2 เท่า หรือ 200%)</strong>
+                      ไม่ได้ยื่นแบบแสดงรายการเลยจนถูกตรวจพบ และมีหนังสือประเมินภาษีย้อนหลัง <strong>(เบี้ยปรับ 2 เท่า เต็มอัตรา หรือลดเหลือ 40%/50% ของเบี้ยปรับ ตามดุลพินิจ)</strong>
                     </p>
                   </button>
                 </div>
 
-                {/* แสดงตารางความเร็วในการขอลดหย่อนกรณีสมัครใจ */}
+                {/* ตารางลดเบี้ยปรับกรณียื่นพร้อมชำระเองโดยไม่ได้รับคำเตือน (ท.ป. 81/2542 ข้อ 5(1)) */}
                 {(vatScenario === 'voluntary_additional' || vatScenario === 'voluntary_late') && (
                   <div className="p-4 bg-indigo-50/40 border border-indigo-100 rounded-xl space-y-2.5 text-xs text-indigo-950">
                     <div className="flex items-center gap-1.5 font-bold">
                       <Sparkles className="w-4 h-4 text-indigo-600" />
-                      <span>เกณฑ์ลดหย่อนเบี้ยปรับตามระยะเวลาล่าช้า (สมัครใจยื่นเอง):</span>
+                      <span>เกณฑ์ลดเบี้ยปรับตามระยะเวลาล่าช้า (ยื่นพร้อมชำระเอง ไม่เคยได้รับคำเตือน):</span>
                     </div>
-                    
+
                     <div className="grid grid-cols-4 gap-2 text-center text-[11px] font-medium font-mono">
-                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
-                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้า 1-15 วัน</span>
-                        <span className="block font-bold text-indigo-700">
-                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 2%' : 'ลดเหลือ 10%'}
-                        </span>
-                      </div>
-                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
-                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้า 16-30 วัน</span>
-                        <span className="block font-bold text-indigo-700">
-                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 5%' : 'ลดเหลือ 20%'}
-                        </span>
-                      </div>
-                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
-                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้า 31-60 วัน</span>
-                        <span className="block font-bold text-indigo-700">
-                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 10%' : 'ลดเหลือ 30%'}
-                        </span>
-                      </div>
-                      <div className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
-                        <span className="block text-slate-500 font-sans text-[10px] font-normal">ช้าเกิน 60 วัน</span>
-                        <span className="block font-bold text-indigo-700">
-                          {vatScenario === 'voluntary_additional' ? 'ลดเหลือ 20%' : 'ลดเหลือ 40%'}
-                        </span>
-                      </div>
+                      {[
+                        { label: 'ช้า 1-15 วัน', pct: 2 },
+                        { label: 'ช้า 16-30 วัน', pct: 5 },
+                        { label: 'ช้า 31-60 วัน', pct: 10 },
+                        { label: 'ช้าเกิน 60 วัน', pct: 20 },
+                      ].map((tier) => (
+                        <div key={tier.label} className="p-2 bg-white rounded-lg border border-indigo-100/60 shadow-xs">
+                          <span className="block text-slate-500 font-sans text-[10px] font-normal">{tier.label}</span>
+                          <span className="block font-bold text-indigo-700">เหลือ {tier.pct}%</span>
+                          <span className="block text-slate-400 font-sans text-[9px] font-normal">
+                            {vatScenario === 'voluntary_late' ? `ของเบี้ยปรับ (= ${tier.pct * 2}% ของภาษี)` : 'ของเบี้ยปรับ (= ของภาษี)'}
+                          </span>
+                        </div>
+                      ))}
                     </div>
 
                     <p className="text-[10px] text-indigo-700/80 font-light leading-normal">
-                      💡 <em>อ้างอิงตามเกณฑ์งด/ลดเบี้ยปรับภาษีมูลค่าเพิ่มสำหรับผู้ยื่นแบบล่าช้าโดยสมัครใจของกรมสรรพากร ช่วยให้ประหยัดค่าใช้จ่ายได้สูงสุดถึง 90% ของยอดเบี้ยปรับดั้งเดิม!</em>
+                      💡 <em>อ้างอิง {LEGAL_BASIS.directive} ข้อ 5(1) เปอร์เซ็นต์คิดจากเบี้ยปรับตามกฎหมาย ไม่ใช่จากยอดภาษี และใช้เมื่อยื่นแบบพร้อมชำระโดยไม่เคยได้รับคำเตือนหรือคำเรียกตรวจสอบเป็นหนังสือ</em>
+                    </p>
+                  </div>
+                )}
+
+                {/* กรณีถูกประเมิน: ลดเหลือ 40%/50% ตามดุลพินิจ (ข้อ 5(2)-(3)) */}
+                {(vatScenario === 'assessed_incorrect' || vatScenario === 'assessed_not_filed') && (
+                  <div className="p-4 bg-amber-50/50 border border-amber-100 rounded-xl space-y-2.5 text-xs text-slate-700">
+                    <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                      <AlertTriangle className="w-4 h-4 text-amber-500" />
+                      <span>การลดเบี้ยปรับกรณีถูกประเมิน (ตามดุลพินิจเจ้าพนักงาน)</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {([
+                        { value: 'NONE', title: 'ไม่ได้รับการลด', sub: 'เต็ม 100% ของเบี้ยปรับ' },
+                        { value: 'PCT_40', title: 'เหลือ 40%', sub: 'ยื่นภายในกำหนดตามหนังสือ / พบภายใน 1 ปีหลังจดทะเบียน' },
+                        { value: 'PCT_50', title: 'เหลือ 50%', sub: 'ยื่นเลยกำหนดตามหนังสือ / พบหลัง 1 ปีหลังจดทะเบียน' },
+                      ] as { value: VatAssessedReduction; title: string; sub: string }[]).map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setVatAssessedReduction(opt.value)}
+                          className={`p-2.5 text-left rounded-xl border transition-all ${
+                            vatAssessedReduction === opt.value
+                              ? 'border-indigo-500 bg-indigo-50/30 text-indigo-950'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <span className="flex items-center justify-between text-xs font-bold">
+                            {opt.title}
+                            {vatAssessedReduction === opt.value && <Check className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
+                          </span>
+                          <span className="block text-[10px] text-slate-400 font-light leading-snug">{opt.sub}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-light leading-normal">
+                      อ้างอิง {LEGAL_BASIS.directive} ข้อ 5(2)-(3) ต้องยื่นคำร้องขอลดก่อนมีหนังสือแจ้งการประเมิน
+                      ค่าเริ่มต้นคือไม่ลด เพื่อแสดงยอดสูงสุดตามกฎหมาย
                     </p>
                   </div>
                 )}
@@ -1698,6 +1738,9 @@ export default function App() {
                 <span className="text-indigo-300 font-semibold">
                   <AnimatedNumber value={resultToUse.criminalFine} prefix="฿" />
                 </span>
+                {resultToUse.criminalFineApplies && resultToUse.criminalFine === 0 && (
+                  <span className="block text-[9px] text-amber-300 font-light">ยังไม่รวมในยอด (กรอกที่ช่องค่าปรับอาญา)</span>
+                )}
               </div>
             </div>
 
@@ -1709,7 +1752,7 @@ export default function App() {
                   <span className="font-bold text-white block">ประหยัดเบี้ยปรับจากเกณฑ์ผ่อนปรน!</span>
                   <p className="font-light leading-relaxed text-[11px]">
                     ยื่นเพิ่มเติมสมัครใจเบี้ยปรับจึงได้รับการงดเว้นหรือลดหย่อนพิเศษเป็น <strong className="text-emerald-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong> 
-                    {activeTab === 'pit' ? ' (ประหยัดค่าปรับไปได้เต็ม 100%)' : ` (ตามเกณฑ์ลดหย่อนล่าช้า เหลือเพียง ${resultToUse.penaltyDiscountPercent}%)`} จากเดิมสูงสุดถึง <AnimatedNumber value={resultToUse.penaltyOriginal} prefix="฿" className="font-semibold" />
+                    {activeTab === 'pit' ? ' (ไม่มีเบี้ยปรับเมื่อยื่นเอง)' : ` (ตามเกณฑ์ลดเบี้ยปรับ เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย)`} จากเดิมสูงสุดถึง <AnimatedNumber value={resultToUse.penaltyOriginal} prefix="฿" className="font-semibold" />
                   </p>
                 </div>
               </div>
@@ -1717,10 +1760,12 @@ export default function App() {
               <div className="p-3 bg-rose-500/15 border border-rose-500/25 rounded-xl flex items-start gap-2 text-xs animate-fadeIn">
                 <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                 <div className="space-y-0.5 text-rose-100">
-                  <span className="font-bold text-white block">มีเบี้ยปรับเต็มอัตราจากการประเมิน</span>
+                  <span className="font-bold text-white block">
+                    {resultToUse.penaltyDiscountPercent >= 100 ? 'มีเบี้ยปรับเต็มอัตราจากการประเมิน' : 'มีเบี้ยปรับจากการประเมิน (หลังได้รับการลด)'}
+                  </span>
                   <p className="font-light leading-relaxed text-[11px]">
-                    โดนเรียกปรับเนื่องจากเจ้าหน้าที่ตรวจพบประเมินภาษีเป็นจำนวน <strong className="text-rose-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong> 
-                    ({activeTab === 'pit' ? (calculationResult.penaltyMultiplier || (scenario === FilingScenario.ASSESSED_NOT_FILED ? 2 : 1)) : (vatScenario === 'assessed_not_filed' ? 2 : 1)} เท่า ลดเหลือ {resultToUse.penaltyDiscountPercent}%)
+                    โดนเรียกปรับเนื่องจากเจ้าหน้าที่ตรวจพบประเมินภาษีเป็นจำนวน <strong className="text-rose-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong>
+                    ({resultToUse.penaltyMultiplier} เท่าของภาษี{resultToUse.penaltyDiscountPercent < 100 ? ` ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : ' ยังไม่ได้รับการลด'})
                   </p>
                 </div>
               </div>
@@ -1769,18 +1814,11 @@ export default function App() {
                 <div className="space-y-0.5">
                   <span className="font-bold text-slate-800 block">2. ค่าปรับอาญา (ล่าช้า)</span>
                   <span className="text-[10px] text-slate-400 font-light leading-tight block">
-                    {activeTab === 'pit' 
-                      ? (scenario === FilingScenario.VOLUNTARY
-                          ? (resultToUse.monthsLate === 0
-                              ? 'ยื่นในเวลาปกติ (ไม่มีค่าปรับ)'
-                              : `ล่าช้าเกินกำหนดปฏิทิน: ปรับ ${resultToUse.criminalFine.toLocaleString()} บาท`)
-                          : 'สรรพากรประเมิน: ปรับอัตราเต็ม 2,000 บาท')
-                      : (isVoluntaryResult
-                          ? (resultToUse.monthsLate === 0
-                              ? 'ยื่นในเวลาปกติ (ไม่มีค่าปรับ)'
-                              : `ปรับยื่นแบบล่าช้า (ภ.พ.30) ตามจริง: ปรับ ${resultToUse.criminalFine.toLocaleString()} บาท`)
-                          : `สรรพากรประเมิน: ปรับล่าช้าสูงสุด ${resultToUse.criminalFine.toLocaleString()} บาท`)
-                    }
+                    {!resultToUse.criminalFineApplies
+                      ? 'ยื่นในเวลาปกติ (ไม่มีค่าปรับ)'
+                      : resultToUse.criminalFine > 0
+                        ? `ตามที่สรรพากรแจ้ง${resultToUse.criminalFineMax !== null ? ` (ไม่เกิน ${resultToUse.criminalFineMax.toLocaleString()} บาทตาม ม.35)` : ''}`
+                        : `ยังไม่รวมในยอด: กรอกจำนวนที่สรรพากรแจ้งในช่องค่าปรับอาญา${resultToUse.criminalFineMax !== null ? ` (ไม่เกิน ${resultToUse.criminalFineMax.toLocaleString()} บาท)` : ''}`}
                   </span>
                 </div>
                 <span className="font-semibold text-indigo-600 font-mono">
@@ -1791,7 +1829,7 @@ export default function App() {
               {/* รายการ 3: เงินเพิ่ม */}
               <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
                 <div className="space-y-0.5">
-                  <span className="font-bold text-slate-800 block">3. เงินเพิ่มสะสม (ม. 27)</span>
+                  <span className="font-bold text-slate-800 block">3. เงินเพิ่มสะสม ({activeTab === 'pit' ? 'ม. 27' : 'ม. 89/1'})</span>
                   <span className="text-[10px] text-slate-400 font-light leading-tight block">
                     {resultToUse.monthsLate === 0 
                       ? 'ไม่มีเงินเพิ่มสะสม' 
@@ -1807,15 +1845,15 @@ export default function App() {
               {/* รายการ 4: เบี้ยปรับ */}
               <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
                 <div className="space-y-0.5">
-                  <span className="font-bold text-slate-800 block">4. ค่าเบี้ยปรับ (ม. 22)</span>
+                  <span className="font-bold text-slate-800 block">4. ค่าเบี้ยปรับ ({activeTab === 'pit' ? 'ม. 22' : 'ม. 89'})</span>
                   <span className="text-[10px] text-slate-400 font-light leading-tight block">
                     {activeTab === 'pit'
-                      ? (scenario === FilingScenario.VOLUNTARY 
-                          ? 'ยื่นเพิ่มเติมด้วยตนเอง: งดเว้นเบี้ยปรับ (0%)' 
-                          : `คิดจากยอดประเมิน ${scenario === FilingScenario.ASSESSED_NOT_FILED ? '2' : '1'} เท่า ลดเหลือ ${resultToUse.penaltyDiscountPercent}%`)
+                      ? (scenario === FilingScenario.VOLUNTARY
+                          ? 'ยื่นเพิ่มเติมด้วยตนเอง: งดเว้นเบี้ยปรับ (0%)'
+                          : `คิดจากยอดประเมิน ${resultToUse.penaltyMultiplier} เท่า ${resultToUse.penaltyDiscountPercent < 100 ? `ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : '(ยังไม่ได้รับการลด)'}`)
                       : (isVoluntaryResult
-                          ? `ผ่อนผันการยื่นแบบด้วยตนเองล่าช้า: ลดหย่อนเหลือ ${resultToUse.penaltyDiscountPercent}% จากเดิมสูงสุด`
-                          : `คิดจากการตรวจประเมินของเจ้าหน้าที่ ${vatScenario === 'assessed_not_filed' ? '2' : '1'} เท่า ลดเหลือ ${resultToUse.penaltyDiscountPercent}%`)
+                          ? `ยื่นเองล่าช้า: ${resultToUse.penaltyMultiplier} เท่าของภาษี ลดเหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย (ท.ป. 81/2542 ข้อ 5)`
+                          : `คิดจากการตรวจประเมิน ${resultToUse.penaltyMultiplier} เท่าของภาษี ${resultToUse.penaltyDiscountPercent < 100 ? `ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : '(ยังไม่ได้รับการลด)'}`)
                     }
                   </span>
                 </div>
@@ -1825,6 +1863,15 @@ export default function App() {
               </div>
 
             </div>
+
+            <p className="text-[10px] text-slate-400 font-light leading-relaxed">
+              ผลลัพธ์เป็นการประมาณการ การลดเบี้ยปรับเป็นดุลพินิจของเจ้าพนักงานและมีเงื่อนไขตามคำสั่งกรมสรรพากร
+              อ้างอิง {LEGAL_BASIS.directive}{' '}
+              <a href={LEGAL_BASIS.url} target="_blank" rel="noopener noreferrer" className="underline">
+                ดูที่เว็บสรรพากร
+              </a>{' '}
+              (ตรวจสอบล่าสุด {LEGAL_BASIS.checkedOn}) ควรยืนยันกับเจ้าหน้าที่ก่อนชำระจริง
+            </p>
 
             {/* เครื่องมือจัดการข้อมูลและพิมพ์รายงาน */}
             <div className="pt-3 border-t border-slate-100/80 no-print">
@@ -1987,7 +2034,7 @@ export default function App() {
                       <span className="font-semibold text-indigo-700">{resultToUse.monthsLate} เดือน</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[9px]">เบี้ยปรับตามเงื่อนไข:</span>
+                      <span className="text-slate-400 block text-[9px]">เบี้ยปรับที่ต้องเสีย (% ของเบี้ยปรับตามกฎหมาย):</span>
                       <span className="font-semibold text-rose-600">{resultToUse.penaltyDiscountPercent}%</span>
                     </div>
                   </div>
@@ -2009,7 +2056,11 @@ export default function App() {
                       <div>
                         <span className="text-slate-600">2. ค่าปรับอาญาล่าช้า (Criminal Fine)</span>
                         <span className="text-[9px] text-slate-400 block font-light">
-                          {activeTab === 'pit' ? 'สูงสุด 2,000 บาทตามกฎหมาย' : 'อัตราคงที่ 100-200 บาทสำหรับ ภ.พ.30'}
+                          {resultToUse.criminalFineApplies && resultToUse.criminalFine === 0
+                            ? 'ยังไม่รวมในยอด (ผู้ใช้ยังไม่ได้กรอกจำนวนที่สรรพากรแจ้ง)'
+                            : resultToUse.criminalFineMax !== null
+                              ? `ตามที่สรรพากรแจ้ง ไม่เกิน ${resultToUse.criminalFineMax.toLocaleString()} บาท (ม.35)`
+                              : 'ตามที่สรรพากรแจ้ง'}
                         </span>
                       </div>
                       <span className="font-mono font-semibold text-indigo-600">
@@ -2020,7 +2071,7 @@ export default function App() {
                     {/* Item 3 */}
                     <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
                       <div>
-                        <span className="text-slate-600">3. เงินเพิ่มสะสม (Surcharge) ม. 27</span>
+                        <span className="text-slate-600">3. เงินเพิ่มสะสม (Surcharge) {activeTab === 'pit' ? 'ม. 27' : 'ม. 89/1'}</span>
                         <span className="text-[9px] text-slate-400 block font-light">อัตรา 1.5% ต่อเดือน (คำนวณ {resultToUse.monthsLate} เดือน)</span>
                       </div>
                       <span className="font-mono font-semibold text-amber-600">
@@ -2031,11 +2082,11 @@ export default function App() {
                     {/* Item 4 */}
                     <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
                       <div>
-                        <span className="text-slate-600">4. เบี้ยปรับ (Penalty) ม. 22</span>
+                        <span className="text-slate-600">4. เบี้ยปรับ (Penalty) {activeTab === 'pit' ? 'ม. 22' : 'ม. 89'}</span>
                         <span className="text-[9px] text-slate-400 block font-light">
-                          {isVoluntaryResult 
-                            ? `ยื่นเพิ่มสมัครใจ: ลดหย่อนเหลือ ${resultToUse.penaltyDiscountPercent}%` 
-                            : `อัตราลดเหลือ ${resultToUse.penaltyDiscountPercent}% จากเดิมสูงสุด`}
+                          {isVoluntaryResult
+                            ? `ยื่นเอง: เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย`
+                            : `เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย`}
                         </span>
                       </div>
                       <span className="font-mono font-semibold text-rose-600">

@@ -9,13 +9,15 @@ export enum FilingScenario {
   ASSESSED_NOT_FILED = 'ASSESSED_NOT_FILED', // โดนประเมิน (ไม่ได้ยื่นแบบเลย)
 }
 
+// ท.ป. 81/2542 ข้อ 4: เจ้าพนักงานประเมินมีอำนาจลดเบี้ยปรับภาษีเงินได้ได้ตามดุลพินิจ
+// แต่ต้องให้เสียไม่น้อยกว่าร้อยละ 50 ของเบี้ยปรับ (ไม่มีตารางตามช่วงวัน)
 export enum PenaltyReduction {
-  WITHIN_30_DAYS = 'WITHIN_30_DAYS', // ภายใน 30 วัน (ลดเบี้ยปรับเหลือ 20%)
-  WITHIN_60_DAYS = 'WITHIN_60_DAYS', // 31-60 วัน (ลดเบี้ยปรับเหลือ 25%)
-  WITHIN_90_DAYS = 'WITHIN_90_DAYS', // 61-90 วัน (ลดเบี้ยปรับเหลือ 30%)
-  OVER_90_DAYS = 'OVER_90_DAYS', // เกิน 90 วัน (ลดเบี้ยปรับเหลือ 50%)
-  NO_REDUCTION = 'NO_REDUCTION', // ไม่ขอรับส่วนลด (จ่ายเต็ม 100%)
+  REDUCED_50 = 'REDUCED_50', // ได้รับอนุมัติลดเบี้ยปรับ เหลือ 50% (ลดได้มากสุด)
+  NO_REDUCTION = 'NO_REDUCTION', // ไม่ได้รับการลด (จ่ายเต็ม 100%)
 }
+
+// ภ.พ.30 กรณีถูกประเมิน: ท.ป. 81/2542 ข้อ 5(2)-(3) ลดเหลือ 40% หรือ 50% ของเบี้ยปรับ
+export type VatAssessedReduction = 'NONE' | 'PCT_40' | 'PCT_50';
 
 export interface TaxYearConfig {
   yearTh: number; // พ.ศ. (e.g., 2568)
@@ -27,11 +29,14 @@ export interface TaxYearConfig {
 export interface CalculationResult {
   taxOwed: number; // ภาษีที่ต้องจ่ายเพิ่ม
   monthsLate: number; // จำนวนเดือนที่ยื่นล่าช้า
-  criminalFine: number; // ค่าปรับอาญา
+  criminalFine: number; // ค่าปรับอาญา (ตามจำนวนที่ผู้ใช้กรอกจากที่สรรพากรแจ้ง; ไม่กรอก = 0)
+  criminalFineApplies: boolean; // เข้าเงื่อนไขต้องเสียค่าปรับอาญาหรือไม่ (ล่าช้า/ถูกประเมิน)
+  criminalFineMax: number | null; // เพดานตามกฎหมาย (ภ.ง.ด. ม.35 = 2,000 บาท) ภ.พ.30 ไม่มีค่าอ้างอิง
   surcharge: number; // เงินเพิ่ม (1.5% ต่อเดือน)
   penaltyOriginal: number; // เบี้ยปรับเต็มจำนวน
   penaltyReduced: number; // เบี้ยปรับหลังหักส่วนลด
-  penaltyDiscountPercent: number; // เปอร์เซ็นต์เบี้ยปรับที่ต้องจ่ายหลังหักส่วนลด
+  penaltyMultiplier: number; // เบี้ยปรับตามกฎหมาย กี่เท่าของภาษี (0, 1 หรือ 2)
+  penaltyDiscountPercent: number; // เปอร์เซ็นต์ของเบี้ยปรับตามกฎหมายที่ต้องจ่ายหลังหักส่วนลด
   totalToPay: number; // ยอดที่ต้องชำระรวมทั้งหมด
   totalPenaltiesAndSurcharges: number; // รวมค่าปรับและเงินเพิ่ม (ไม่รวมภาษีต้น)
 }

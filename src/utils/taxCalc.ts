@@ -2,6 +2,7 @@ import {
   FilingMethod,
   FilingScenario,
   PenaltyReduction,
+  VatAssessedReduction,
   TaxYearConfig,
   CalculationResult,
   IncomeEstimation,
@@ -24,7 +25,7 @@ export const TAX_YEARS: TaxYearConfig[] = [
   {
     yearTh: 2566,
     yearEn: 2023,
-    paperDeadline: '2024-03-31',
+    paperDeadline: '2024-04-01', // 31 มี.ค. 2567 เป็นวันอาทิตย์ เลื่อนเป็นวันทำการถัดไป
     onlineDeadline: '2024-04-09', // วันที่ 8 เป็นวันหยุดชดเชยจักรี เลื่อนเป็นวันที่ 9
   },
   {
@@ -34,6 +35,22 @@ export const TAX_YEARS: TaxYearConfig[] = [
     onlineDeadline: '2023-04-10', // วันที่ 8-9 เป็นวันเสาร์อาทิตย์ เลื่อนเป็นวันที่ 10
   }
 ];
+
+// แหล่งอ้างอิงกฎหมายที่ใช้ในตารางลดเบี้ยปรับ (ตรวจสอบกับเว็บกรมสรรพากรเมื่อ 26 ต.ค. 2569)
+export const LEGAL_BASIS = {
+  directive: 'คำสั่งกรมสรรพากร ที่ ท.ป. 81/2542 (แก้ไขโดย ท.ป. 369/2569 มีผลตั้งแต่ 3 ก.ค. 2569)',
+  url: 'https://www.rd.go.th/3361.html',
+  checkedOn: '26 ต.ค. 2569',
+} as const;
+
+// เพดานค่าปรับอาญากรณีไม่ยื่น/ยื่นแบบ ภ.ง.ด.ล่าช้า ตามมาตรา 35 แห่งประมวลรัษฎากร
+export const PIT_CRIMINAL_FINE_MAX = 2000;
+
+// ค่าปรับอาญา = จำนวนที่ผู้ใช้กรอกตามที่สรรพากรแจ้ง (ไม่กรอกถือเป็น 0) ไม่เกินเพดาน (ถ้ามี)
+function resolveCriminalFine(applies: boolean, entered: number, max: number | null): number {
+  if (!applies || !(entered > 0)) return 0;
+  return max === null ? entered : Math.min(entered, max);
+}
 
 // คำนวณจำนวนเดือนที่ล่าช้า (เศษของเดือนปัดเป็น 1 เดือน)
 export function calculateMonthsLate(deadlineStr: string, paymentDateStr: string): number {
@@ -86,39 +103,19 @@ export function calculateTaxPenalties(
   method: FilingMethod,
   scenario: FilingScenario,
   reduction: PenaltyReduction,
-  paymentDateStr: string
+  paymentDateStr: string,
+  criminalFineEntered: number = 0
 ): CalculationResult {
   const yearConfig = TAX_YEARS.find(y => y.yearTh === taxYearTh) || TAX_YEARS[0];
   const deadlineStr = method === FilingMethod.ONLINE ? yearConfig.onlineDeadline : yearConfig.paperDeadline;
-  
+
   // 1. คำนวณเดือนล่าช้า
   const monthsLate = calculateMonthsLate(deadlineStr, paymentDateStr);
 
-  // 2. คำนวณค่าปรับอาญา (Criminal Fine)
-  let criminalFine = 0;
-  if (scenario === FilingScenario.VOLUNTARY) {
-    if (monthsLate === 0) {
-      criminalFine = 0;
-    } else {
-      // ตรวจสอบว่าล่าช้าไม่เกิน 7 วันหรือไม่
-      const deadline = new Date(deadlineStr);
-      deadline.setHours(0, 0, 0, 0);
-      const paymentDate = new Date(paymentDateStr);
-      paymentDate.setHours(0, 0, 0, 0);
-      
-      const diffTime = paymentDate.getTime() - deadline.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
-      if (diffDays <= 7) {
-        criminalFine = 100; // ไม่เกิน 7 วัน ปรับ 100 บาท
-      } else {
-        criminalFine = 200; // เกิน 7 วัน ปรับ 200 บาท
-      }
-    }
-  } else {
-    // กรณีเจ้าหน้าที่ประเมิน มักโดนปรับอัตราเต็มสำหรับค่าปรับอาญาล่าช้า (สูงสุด 2,000 บาท)
-    criminalFine = taxOwed > 0 ? 2000 : 200;
-  }
+  // 2. ค่าปรับอาญา (ม. 35 ไม่เกิน 2,000 บาท) กรมสรรพากรไม่ได้ประกาศตารางตายตัว
+  //    จึงใช้จำนวนที่ผู้ใช้กรอกตามที่สรรพากรแจ้ง (ไม่กรอก = 0 และแจ้งเตือนว่ายังไม่รวมในยอด)
+  const criminalFineApplies = scenario !== FilingScenario.VOLUNTARY || monthsLate > 0;
+  const criminalFine = resolveCriminalFine(criminalFineApplies, criminalFineEntered, PIT_CRIMINAL_FINE_MAX);
 
   // 3. คำนวณเงินเพิ่ม (Surcharge) - 1.5% ต่อเดือนของภาษีที่ต้องชำระ (เศษของเดือนปัดเป็น 1 เดือน)
   // และไม่เกินตัวเงินภาษีที่ค้างชำระ
@@ -138,29 +135,13 @@ export function calculateTaxPenalties(
 
   const penaltyOriginal = taxOwed * penaltyMultiplier;
 
-  // เปอร์เซ็นต์เบี้ยปรับที่ต้องจ่ายจริงหลังได้รับการลดหย่อน
+  // เปอร์เซ็นต์ของเบี้ยปรับที่ต้องจ่ายจริง
+  // ท.ป. 81/2542 ข้อ 4: ลดได้ตามดุลพินิจแต่ต้องเสียไม่น้อยกว่า 50% (ไม่มีตารางตามช่วงวัน)
   let penaltyDiscountPercent = 100;
-  if (scenario !== FilingScenario.VOLUNTARY) {
-    switch (reduction) {
-      case PenaltyReduction.WITHIN_30_DAYS:
-        penaltyDiscountPercent = 20; // ลดเหลือ 20%
-        break;
-      case PenaltyReduction.WITHIN_60_DAYS:
-        penaltyDiscountPercent = 25; // ลดเหลือ 25%
-        break;
-      case PenaltyReduction.WITHIN_90_DAYS:
-        penaltyDiscountPercent = 30; // ลดเหลือ 30%
-        break;
-      case PenaltyReduction.OVER_90_DAYS:
-        penaltyDiscountPercent = 50; // ลดเหลือ 50%
-        break;
-      case PenaltyReduction.NO_REDUCTION:
-      default:
-        penaltyDiscountPercent = 100; // จ่ายเต็ม 100%
-        break;
-    }
-  } else {
+  if (scenario === FilingScenario.VOLUNTARY) {
     penaltyDiscountPercent = 0; // ยื่นเองไม่มีเบี้ยปรับ
+  } else if (reduction === PenaltyReduction.REDUCED_50) {
+    penaltyDiscountPercent = 50;
   }
 
   const penaltyReduced = (penaltyOriginal * penaltyDiscountPercent) / 100;
@@ -173,9 +154,12 @@ export function calculateTaxPenalties(
     taxOwed,
     monthsLate,
     criminalFine,
+    criminalFineApplies,
+    criminalFineMax: PIT_CRIMINAL_FINE_MAX,
     surcharge,
     penaltyOriginal,
     penaltyReduced,
+    penaltyMultiplier,
     penaltyDiscountPercent,
     totalToPay,
     totalPenaltiesAndSurcharges,
@@ -210,7 +194,9 @@ export function calculateProgressiveTax(netIncome: number): {
   const bracketBreakdown: { bracketName: string; incomeInBracket: number; rate: number; tax: number }[] = [];
 
   for (const bracket of THAI_TAX_BRACKETS) {
-    const rangeSize = bracket.max - bracket.min + 1;
+    // ช่วงแรกเริ่มที่ 0 (ไม่ใช่ 1) จึงกว้าง 150,000 พอดี ช่วงถัดไปเริ่มที่ min-1 (เช่น 150,001 = เกิน 150,000)
+    const lowerBound = bracket.min === 0 ? 0 : bracket.min - 1;
+    const rangeSize = bracket.max - lowerBound;
     let incomeInBracket = 0;
 
     if (remainingIncome > 0) {
@@ -277,7 +263,8 @@ export function estimateMissingTax(est: IncomeEstimation): {
   }
 
   // 2. หักค่าลดหย่อน
-  const personalAllowance = 60000; // ค่าลดหย่อนส่วนตัวปกติ 60,000 บาท
+  // ค่าลดหย่อนส่วนตัว: ใช้ค่าที่รับเข้ามา (ค่าเริ่มต้น 60,000 บาท) ไม่ล็อกค่าคงที่
+  const personalAllowance = Number.isFinite(est.personalAllowance) ? est.personalAllowance : 60000;
   const deductibleAllowances = personalAllowance + est.otherAllowances;
 
   // 3. คำนวณเงินได้สุทธิ
@@ -305,11 +292,16 @@ export interface VatCalculationResult {
   taxOwed: number;
   monthsLate: number;
   deadlineDate: string;
-  criminalFine: number;
+  criminalFine: number; // ตามจำนวนที่ผู้ใช้กรอกจากที่สรรพากรแจ้ง (ไม่กรอก = 0)
+  criminalFineApplies: boolean; // ล่าช้า/ถูกประเมิน จึงอาจต้องเสียค่าปรับอาญา
+  criminalFineMax: number | null; // ภ.พ.30 ไม่มีเพดานอ้างอิงที่ยืนยันได้
   surcharge: number;
-  penaltyOriginal: number;
+  penaltyOriginal: number; // เบี้ยปรับตามกฎหมายเต็มจำนวน (1 หรือ 2 เท่าของภาษี)
   penaltyReduced: number;
-  penaltyPercentApplied: number;
+  penaltyMultiplier: number; // เบี้ยปรับตามกฎหมาย กี่เท่าของภาษี
+  // % ของ "เบี้ยปรับตามกฎหมาย" ที่ต้องเสียหลังลด (ท.ป. 81/2542 ข้อ 5) ไม่ใช่ % ของภาษี
+  penaltyDiscountPercent: number;
+  penaltyPercentApplied: number; // ชื่อเดิม = penaltyDiscountPercent
   totalToPay: number;
   totalPenaltiesAndSurcharges: number;
 }
@@ -335,6 +327,23 @@ export function getVatDeadline(month: number, yearTh: number, method: FilingMeth
   return `${deadlineYear}-${monthStr}-${dayStr}`;
 }
 
+// ตารางลดเบี้ยปรับ ภ.พ.30 กรณียื่นแบบพร้อมชำระเองโดยไม่ได้รับคำเตือน (ท.ป. 81/2542 ข้อ 5(1))
+// นับจากวันพ้นกำหนดชำระ: ไม่เกิน 15 วัน 2%, 16-30 วัน 5%, 31-60 วัน 10%, เกิน 60 วัน 20% ของเบี้ยปรับตามกฎหมาย
+export function vatVoluntaryPenaltyPercent(daysLate: number): number {
+  if (daysLate <= 0) return 0; // ยื่นและชำระทันกำหนด ไม่มีเบี้ยปรับ
+  if (daysLate <= 15) return 2;
+  if (daysLate <= 30) return 5;
+  if (daysLate <= 60) return 10;
+  return 20;
+}
+
+// ถูกประเมิน: ข้อ 5(2)-(3) ลดเหลือ 40% หรือ 50% ของเบี้ยปรับ (ดุลพินิจเจ้าพนักงาน) ไม่ลด = 100%
+const VAT_ASSESSED_PERCENT: Record<VatAssessedReduction, number> = {
+  NONE: 100,
+  PCT_40: 40,
+  PCT_50: 50,
+};
+
 // คำนวณเบี้ยปรับ เงินเพิ่ม และค่าปรับอาญาของ VAT (ภ.พ.30)
 export function calculateVatPenalties(
   taxOwed: number,
@@ -342,28 +351,24 @@ export function calculateVatPenalties(
   yearTh: number,
   method: FilingMethod,
   scenario: 'voluntary_additional' | 'voluntary_late' | 'assessed_incorrect' | 'assessed_not_filed',
-  paymentDateStr: string
+  paymentDateStr: string,
+  criminalFineEntered: number = 0,
+  assessedReduction: VatAssessedReduction = 'NONE'
 ): VatCalculationResult {
   const deadlineDate = getVatDeadline(month, yearTh, method);
   const monthsLate = calculateMonthsLate(deadlineDate, paymentDateStr);
 
-  // 1. ค่าปรับทางอาญา (Criminal Fine) สำหรับ ภ.พ.30 ล่าช้า
-  let criminalFine = 0;
-  if (monthsLate > 0) {
-    const deadline = new Date(deadlineDate);
-    deadline.setHours(0, 0, 0, 0);
-    const paymentDate = new Date(paymentDateStr);
-    paymentDate.setHours(0, 0, 0, 0);
+  const deadline = new Date(deadlineDate);
+  deadline.setHours(0, 0, 0, 0);
+  const paymentDate = new Date(paymentDateStr);
+  paymentDate.setHours(0, 0, 0, 0);
+  const diffDays = Math.ceil((paymentDate.getTime() - deadline.getTime()) / (1000 * 60 * 60 * 24));
 
-    const diffTime = paymentDate.getTime() - deadline.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const isAssessed = scenario === 'assessed_incorrect' || scenario === 'assessed_not_filed';
 
-    if (diffDays <= 7) {
-      criminalFine = 300; // ไม่เกิน 7 วัน ปรับ 300 บาท
-    } else {
-      criminalFine = 500; // เกิน 7 วัน ปรับ 500 บาท
-    }
-  }
+  // 1. ค่าปรับทางอาญา: ไม่มีตารางตายตัวที่ยืนยันได้ จึงใช้จำนวนที่ผู้ใช้กรอกตามที่สรรพากรแจ้ง
+  const criminalFineApplies = isAssessed || monthsLate > 0;
+  const criminalFine = resolveCriminalFine(criminalFineApplies, criminalFineEntered, null);
 
   // 2. เงินเพิ่ม (Surcharge) - 1.5% ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน) และสูงสุดไม่เกินยอดภาษี
   let surcharge = 0;
@@ -373,65 +378,16 @@ export function calculateVatPenalties(
   }
 
   // 3. เบี้ยปรับ (Penalty)
-  let penaltyOriginalMultiplier = 0;
-  let penaltyPercentApplied = 0;
+  // เบี้ยปรับตามกฎหมาย: ยื่นไม่ครบ (ม.89(4)) 1 เท่า / ไม่ยื่นแบบ (ม.89(3)) 2 เท่า ของภาษี
+  const penaltyMultiplier =
+    scenario === 'voluntary_additional' || scenario === 'assessed_incorrect' ? 1.0 : 2.0;
+  const penaltyOriginal = taxOwed * penaltyMultiplier;
 
-  if (scenario === 'voluntary_additional') {
-    // สมัครใจยื่นเพิ่มเติม (เคยยื่นไว้แล้วแต่ไม่ครบ) - เบี้ยปรับเต็ม 1 เท่า (100%)
-    penaltyOriginalMultiplier = 1.0;
-
-    const deadline = new Date(deadlineDate);
-    deadline.setHours(0, 0, 0, 0);
-    const paymentDate = new Date(paymentDateStr);
-    paymentDate.setHours(0, 0, 0, 0);
-    const diffTime = paymentDate.getTime() - deadline.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays <= 0) {
-      penaltyPercentApplied = 0;
-    } else if (diffDays <= 15) {
-      penaltyPercentApplied = 2; // เหลือ 2% ของยอดภาษีที่ขาด
-    } else if (diffDays <= 30) {
-      penaltyPercentApplied = 5; // เหลือ 5%
-    } else if (diffDays <= 60) {
-      penaltyPercentApplied = 10; // เหลือ 10%
-    } else {
-      penaltyPercentApplied = 20; // เหลือ 20%
-    }
-  } else if (scenario === 'voluntary_late') {
-    // สมัครใจยื่นล่าช้า (ไม่เคยยื่นเลยแล้วมายื่นล่าช้า) - เบี้ยปรับเต็ม 2 เท่า (200%)
-    penaltyOriginalMultiplier = 2.0;
-
-    const deadline = new Date(deadlineDate);
-    deadline.setHours(0, 0, 0, 0);
-    const paymentDate = new Date(paymentDateStr);
-    paymentDate.setHours(0, 0, 0, 0);
-    const diffTime = paymentDate.getTime() - deadline.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays <= 0) {
-      penaltyPercentApplied = 0;
-    } else if (diffDays <= 15) {
-      penaltyPercentApplied = 10; // เหลือ 10% ของยอดภาษี
-    } else if (diffDays <= 30) {
-      penaltyPercentApplied = 20; // เหลือ 20%
-    } else if (diffDays <= 60) {
-      penaltyPercentApplied = 30; // เหลือ 30%
-    } else {
-      penaltyPercentApplied = 40; // เหลือ 40%
-    }
-  } else if (scenario === 'assessed_incorrect') {
-    // เจ้าหน้าที่ประเมิน (เคยยื่นไม่ครบ) - เบี้ยปรับเต็ม 1 เท่า (100%)
-    penaltyOriginalMultiplier = 1.0;
-    penaltyPercentApplied = 100;
-  } else if (scenario === 'assessed_not_filed') {
-    // เจ้าหน้าที่ประเมิน (ไม่เคยยื่นแบบ) - เบี้ยปรับเต็ม 2 เท่า (200%)
-    penaltyOriginalMultiplier = 2.0;
-    penaltyPercentApplied = 200;
-  }
-
-  const penaltyOriginal = taxOwed * penaltyOriginalMultiplier;
-  const penaltyReduced = (taxOwed * penaltyPercentApplied) / 100;
+  // % ของเบี้ยปรับตามกฎหมายที่ต้องเสีย
+  const penaltyDiscountPercent = isAssessed
+    ? VAT_ASSESSED_PERCENT[assessedReduction]
+    : vatVoluntaryPenaltyPercent(diffDays);
+  const penaltyReduced = (penaltyOriginal * penaltyDiscountPercent) / 100;
 
   const totalPenaltiesAndSurcharges = criminalFine + surcharge + penaltyReduced;
   const totalToPay = taxOwed + totalPenaltiesAndSurcharges;
@@ -441,10 +397,14 @@ export function calculateVatPenalties(
     monthsLate,
     deadlineDate,
     criminalFine,
+    criminalFineApplies,
+    criminalFineMax: null,
     surcharge,
     penaltyOriginal,
     penaltyReduced,
-    penaltyPercentApplied,
+    penaltyMultiplier,
+    penaltyDiscountPercent,
+    penaltyPercentApplied: penaltyDiscountPercent,
     totalToPay,
     totalPenaltiesAndSurcharges,
   };
