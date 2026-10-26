@@ -54,6 +54,20 @@ const parseMoney = (value: string): number => {
   return isNaN(n) || n < 0 ? 0 : n;
 };
 
+import { formatBaht, formatInputNumber } from './utils/format';
+import {
+  HistoryRecord,
+  PIT_SCENARIO_TEXT,
+  VAT_SCENARIO_TEXT,
+  THAI_MONTHS_FULL,
+  loadHistory,
+  saveHistory,
+  newRecordId,
+  MAX_HISTORY,
+} from './utils/history';
+import { exportRecordToExcel, exportHistoryToExcel } from './utils/excel';
+import SaveExportBar from './components/SaveExportBar';
+import HistoryPanel from './components/HistoryPanel';
 import TaxDonutChart from './components/TaxDonutChart';
 import ProgressiveTaxBar from './components/ProgressiveTaxBar';
 import { AnimatedNumber } from './components/AnimatedNumber';
@@ -86,7 +100,7 @@ function CriminalFineField({
       />
       <p className="text-[10px] text-slate-500 font-light leading-relaxed">
         {max !== null
-          ? `ตามมาตรา 35 ปรับไม่เกิน ${max.toLocaleString()} บาท และกรมสรรพากรไม่ได้ประกาศอัตราตายตัว จึงใช้จำนวนที่เจ้าหน้าที่แจ้งหรือเปรียบเทียบปรับจริง (ระบบจะไม่เกินเพดาน)`
+          ? `ตามมาตรา 35 ปรับไม่เกิน ${formatBaht(max, 0)} บาท และกรมสรรพากรไม่ได้ประกาศอัตราตายตัว จึงใช้จำนวนที่เจ้าหน้าที่แจ้งหรือเปรียบเทียบปรับจริง (ระบบจะไม่เกินเพดาน)`
           : 'กรมสรรพากรไม่ได้ประกาศอัตราตายตัวที่ยืนยันได้ จึงใช้จำนวนที่เจ้าหน้าที่แจ้งหรือเปรียบเทียบปรับจริง'}
       </p>
     </div>
@@ -98,7 +112,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'pit' | 'vat'>('pit');
 
   // === โหมดภาษีมูลค่าเพิ่ม (VAT) ===
-  const [vatOwedInput, setVatOwedInput] = useState<string>('10000');
+  const [vatOwedInput, setVatOwedInput] = useState<string>('10,000');
   const [vatMonth, setVatMonth] = useState<number>(5); // เดือนพฤษภาคม
   const [vatYearTh, setVatYearTh] = useState<number>(2568);
   const [vatFilingMethod, setVatFilingMethod] = useState<FilingMethod>(FilingMethod.ONLINE);
@@ -125,12 +139,14 @@ export default function App() {
   const [pitCriminalFineInput, setPitCriminalFineInput] = useState<string>('');
   const [vatCriminalFineInput, setVatCriminalFineInput] = useState<string>('');
   const [vatAssessedReduction, setVatAssessedReduction] = useState<VatAssessedReduction>('NONE');
+  // ประวัติการคำนวณ (เก็บใน localStorage ของเครื่องนี้)
+  const [history, setHistory] = useState<HistoryRecord[]>(() => loadHistory());
   
   // วันที่คาดว่าจะยื่นชำระจริง (Default เป็นวันนี้ 2026-06-29 ตาม metadata)
   const [paymentDate, setPaymentDate] = useState<string>('2026-06-29');
 
   // ยอดภาษีขาดกรณีกรอกโดยตรง
-  const [taxOwedInput, setTaxOwedInput] = useState<string>('5000');
+  const [taxOwedInput, setTaxOwedInput] = useState<string>('5,000');
 
   // รายละเอียดสำหรับการประเมินรายได้เพื่อคำนวณภาษีขาด
   const [incomeEst, setIncomeEst] = useState<IncomeEstimation>({
@@ -162,15 +178,8 @@ export default function App() {
     }
   };
 
-  // ฟังก์ชันจัดรูปแบบตัวเลขให้ใส่คอมม่า (เช่น 10000 -> 10,000)
-  const formatNumberWithCommas = (value: number | string) => {
-    if (value === undefined || value === null) return '';
-    const clean = value.toString().replace(/,/g, '');
-    if (clean === '') return '';
-    const parts = clean.split('.');
-    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return parts.join('.');
-  };
+  // ช่องกรอกตัวเลข: ใส่คอมม่าให้ขณะพิมพ์ (ใช้ตัวจัดรูปแบบกลาง)
+  const formatNumberWithCommas = formatInputNumber;
 
   // ฟังก์ชันสำหรับคัดลอกรายงานสรุปผล
   const handleCopySummary = () => {
@@ -189,13 +198,13 @@ export default function App() {
 จำนวนเดือนที่ล่าช้า: ${calculationResult.monthsLate} เดือน (กำหนดชำระปกติ: ${formatThaiDate(currentDeadline)})
 วันที่คาดว่าจะยื่นชำระจริง: ${formatThaiDate(paymentDate)}
 -----------------------------------------
-1. ยอดภาษีค้างชำระหลัก: ฿${calculationResult.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-2. ค่าปรับทางอาญา: ${calculationResult.criminalFineApplies && calculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ไม่เกิน 2,000 บาท ตาม ม.35 ตามที่สรรพากรแจ้ง)' : `฿${calculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-3. เงินเพิ่มสะสม (ม. 27): ฿${calculationResult.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${calculationResult.monthsLate === 0 ? '0' : (1.5 * calculationResult.monthsLate).toFixed(1)}% ต่อเดือน)
-4. ค่าเบี้ยปรับ (ม. 22): ฿${calculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (ลดจากยอดเต็ม ฿${calculationResult.penaltyOriginal.toLocaleString()} คงเหลือ ${calculationResult.penaltyDiscountPercent}%)
+1. ยอดภาษีค้างชำระหลัก: ฿${formatBaht(calculationResult.taxOwed)}
+2. ค่าปรับทางอาญา: ${calculationResult.criminalFineApplies && calculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ไม่เกิน 2,000 บาท ตาม ม.35 ตามที่สรรพากรแจ้ง)' : `฿${formatBaht(calculationResult.criminalFine)}`}
+3. เงินเพิ่ม (ม. 27): ฿${formatBaht(calculationResult.surcharge)} (${calculationResult.monthsLate === 0 ? '0' : (1.5 * calculationResult.monthsLate).toFixed(1)}% ต่อเดือน)
+4. ค่าเบี้ยปรับ (ม. 22): ฿${formatBaht(calculationResult.penaltyReduced)} (ลดจากยอดเต็ม ฿${formatBaht(calculationResult.penaltyOriginal)} คงเหลือ ${calculationResult.penaltyDiscountPercent}%)
 -----------------------------------------
-💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${calculationResult.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-🎉 ประหยัดเบี้ยปรับไปได้: ฿${(calculationResult.penaltyOriginal - calculationResult.penaltyReduced).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${formatBaht(calculationResult.totalToPay)}
+ประหยัดเบี้ยปรับได้: ฿${formatBaht(calculationResult.penaltyOriginal - calculationResult.penaltyReduced)} บาท
 -----------------------------------------
 *คำนวณโดยระบบประเมินค่าปรับภาษีเงินได้บุคคลธรรมดาแบบ Real-time`;
     } else {
@@ -220,13 +229,13 @@ export default function App() {
 จำนวนเดือนที่ล่าช้า: ${vatCalculationResult.monthsLate} เดือน (กำหนดชำระปกติ: ${formatThaiDate(vatDeadline)})
 วันที่คาดว่าจะยื่นชำระจริง: ${formatThaiDate(vatPaymentDate)}
 -----------------------------------------
-1. ยอดภาษี VAT ค้างชำระหลัก: ฿${vatCalculationResult.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-2. ค่าปรับทางอาญา: ${vatCalculationResult.criminalFineApplies && vatCalculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ตามที่สรรพากรแจ้ง)' : `฿${vatCalculationResult.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-3. เงินเพิ่มสะสม (1.5% ต่อเดือน): ฿${vatCalculationResult.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-4. ค่าเบี้ยปรับ (ภ.พ.30): ฿${vatCalculationResult.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (เบี้ยปรับตามกฎหมาย ${vatCalculationResult.penaltyMultiplier} เท่า ฿${vatCalculationResult.penaltyOriginal.toLocaleString()} เหลือเสียจริง ${vatCalculationResult.penaltyDiscountPercent}% ตาม ท.ป. 81/2542 ข้อ 5)
+1. ยอดภาษี VAT ค้างชำระหลัก: ฿${formatBaht(vatCalculationResult.taxOwed)}
+2. ค่าปรับทางอาญา: ${vatCalculationResult.criminalFineApplies && vatCalculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ตามที่สรรพากรแจ้ง)' : `฿${formatBaht(vatCalculationResult.criminalFine)}`}
+3. เงินเพิ่ม (1.5% ต่อเดือน): ฿${formatBaht(vatCalculationResult.surcharge)}
+4. ค่าเบี้ยปรับ (ภ.พ.30): ฿${formatBaht(vatCalculationResult.penaltyReduced)} (เบี้ยปรับตามกฎหมาย ${vatCalculationResult.penaltyMultiplier} เท่า ฿${formatBaht(vatCalculationResult.penaltyOriginal)} เหลือเสียจริง ${vatCalculationResult.penaltyDiscountPercent}% ตาม ท.ป. 81/2542 ข้อ 5)
 -----------------------------------------
-💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${vatCalculationResult.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-🎉 ประหยัดเบี้ยปรับไปได้: ฿${(vatCalculationResult.penaltyOriginal - vatCalculationResult.penaltyReduced).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${formatBaht(vatCalculationResult.totalToPay)}
+ประหยัดเบี้ยปรับได้: ฿${formatBaht(vatCalculationResult.penaltyOriginal - vatCalculationResult.penaltyReduced)} บาท
 -----------------------------------------
 *คำนวณโดยระบบประเมินค่าปรับภาษีมูลค่าเพิ่ม (ภ.พ.30) แบบ Real-time`;
     }
@@ -402,6 +411,99 @@ export default function App() {
   const yearThToUse = activeTab === 'pit' ? taxYearTh : vatYearTh;
   const filingMethodToUse = activeTab === 'pit' ? filingMethod : vatFilingMethod;
 
+  // ---------- ประวัติและส่งออก Excel ----------
+  const buildRecord = (label: string): HistoryRecord => {
+    const isPit = activeTab === 'pit';
+    const res = resultToUse;
+    const penaltyRuleText = isPit
+      ? (scenario === FilingScenario.VOLUNTARY
+          ? 'ยื่นเอง: ไม่มีเบี้ยปรับ'
+          : `เบี้ยปรับ ${res.penaltyMultiplier} เท่า เหลือเสียจริง ${res.penaltyDiscountPercent}% (ท.ป. 81/2542 ข้อ 4)`)
+      : `เบี้ยปรับ ${res.penaltyMultiplier} เท่า เหลือเสียจริง ${res.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย (ท.ป. 81/2542 ข้อ 5)`;
+    return {
+      id: newRecordId(),
+      savedAt: new Date().toISOString(),
+      label,
+      kind: activeTab,
+      taxTypeText: isPit ? 'ภาษีเงินได้บุคคลธรรมดา (ภ.ง.ด.90/91)' : 'ภาษีมูลค่าเพิ่ม (ภ.พ.30)',
+      periodText: isPit ? `ปีภาษี ${taxYearTh}` : `${THAI_MONTHS_FULL[vatMonth - 1]} ${vatYearTh}`,
+      methodText: filingMethodToUse === FilingMethod.ONLINE
+        ? (isPit ? 'ยื่นออนไลน์' : 'ยื่นออนไลน์ (ภายในวันที่ 23 ของเดือนถัดไป)')
+        : (isPit ? 'ยื่นกระดาษ' : 'ยื่นกระดาษ (ภายในวันที่ 15 ของเดือนถัดไป)'),
+      scenarioText: isPit ? PIT_SCENARIO_TEXT[scenario] : VAT_SCENARIO_TEXT[vatScenario],
+      penaltyRuleText,
+      deadline: deadlineToUse,
+      inputs: {
+        filingMethod: filingMethodToUse,
+        paymentDate: paymentDateToUse,
+        taxOwed: res.taxOwed,
+        criminalFineEntered: isPit ? parseMoney(pitCriminalFineInput) : parseMoney(vatCriminalFineInput),
+        ...(isPit
+          ? { taxYearTh, scenario, reduction }
+          : { vatMonth, vatYearTh, vatScenario, vatAssessedReduction }),
+      },
+      result: {
+        taxOwed: res.taxOwed,
+        monthsLate: res.monthsLate,
+        criminalFine: res.criminalFine,
+        criminalFineApplies: res.criminalFineApplies,
+        surcharge: res.surcharge,
+        penaltyOriginal: res.penaltyOriginal,
+        penaltyReduced: res.penaltyReduced,
+        penaltyMultiplier: res.penaltyMultiplier,
+        penaltyDiscountPercent: res.penaltyDiscountPercent,
+        totalToPay: res.totalToPay,
+      },
+    };
+  };
+
+  const handleSaveRecord = (label: string): boolean => {
+    const next = [buildRecord(label), ...history].slice(0, MAX_HISTORY);
+    setHistory(next);
+    return saveHistory(next);
+  };
+
+  const handleExportCurrent = async (label: string) => {
+    await exportRecordToExcel(buildRecord(label));
+  };
+
+  const handleLoadRecord = (r: HistoryRecord) => {
+    const i = r.inputs;
+    setActiveTab(r.kind);
+    if (r.kind === 'pit') {
+      if (i.taxYearTh !== undefined) setTaxYearTh(i.taxYearTh);
+      if (i.scenario !== undefined) setScenario(i.scenario);
+      if (i.reduction !== undefined) setReduction(i.reduction);
+      setFilingMethod(i.filingMethod);
+      setPaymentDate(i.paymentDate);
+      setTaxOwedMode('simple');
+      setTaxOwedInput(formatNumberWithCommas(String(i.taxOwed)));
+      setPitCriminalFineInput(i.criminalFineEntered > 0 ? formatNumberWithCommas(String(i.criminalFineEntered)) : '');
+    } else {
+      if (i.vatMonth !== undefined) setVatMonth(i.vatMonth);
+      if (i.vatYearTh !== undefined) setVatYearTh(i.vatYearTh);
+      if (i.vatScenario !== undefined) setVatScenario(i.vatScenario);
+      if (i.vatAssessedReduction !== undefined) setVatAssessedReduction(i.vatAssessedReduction);
+      setVatFilingMethod(i.filingMethod);
+      setVatPaymentDate(i.paymentDate);
+      setVatOwedMode('simple');
+      setVatOwedInput(formatNumberWithCommas(String(i.taxOwed)));
+      setVatCriminalFineInput(i.criminalFineEntered > 0 ? formatNumberWithCommas(String(i.criminalFineEntered)) : '');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteRecord = (id: string) => {
+    const next = history.filter((r) => r.id !== id);
+    setHistory(next);
+    saveHistory(next);
+  };
+
+  const handleClearHistory = () => {
+    setHistory([]);
+    saveHistory([]);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 antialiased font-sans flex flex-col">
       {/* ส่วนหัวของแอป (Header) */}
@@ -414,7 +516,7 @@ export default function App() {
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider font-extrabold bg-emerald-500/20 text-emerald-400 rounded border border-emerald-400/20">
-                  อัปเดตเกณฑ์สรรพากรล่าสุด
+                  ตามเกณฑ์ ท.ป. 81/2542 (ฉบับ 2569)
                 </span>
               </div>
               <h1 className="text-xl md:text-2xl font-bold tracking-tight mt-0.5">
@@ -428,7 +530,7 @@ export default function App() {
           
           <div className="flex items-center gap-4 text-xs bg-white/5 py-2 px-3.5 rounded-xl border border-white/10">
             <div className="text-right">
-              <span className="block text-slate-400 font-mono text-[10px]">CURRENT TIME (LOCAL)</span>
+              <span className="block text-slate-400 font-mono text-[10px]">วันนี้</span>
               <span className="font-semibold text-emerald-400 font-mono">
                 {formatThaiDate('2026-06-29')}
               </span>
@@ -722,7 +824,7 @@ export default function App() {
                 </p>
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-600">
-                    ยอดเงินภาษีต้นที่ต้องชำระเพิ่ม (บาท)
+                    ยอดภาษีที่ต้องชำระเพิ่ม (บาท)
                   </label>
                   <div className="relative">
                     <span className="absolute left-3.5 top-3 text-sm font-semibold text-slate-400 font-mono">฿</span>
@@ -878,12 +980,12 @@ export default function App() {
                   {/* สรุปข้อมูลการประเมินภาษีแบบก้าวหน้า */}
                   <div className="flex flex-col justify-end">
                     <div className="text-right space-y-1">
-                      <span className="text-[10px] text-slate-400 font-medium block">ประเมินภาษีขาดสะสม</span>
+                      <span className="text-[10px] text-slate-400 font-medium block">ภาษีที่ขาด (ประเมิน)</span>
                       <div className="text-sm font-extrabold text-indigo-700 font-mono">
-                        ฿{estimationResult.estimatedAdditionalTaxNeeded.toLocaleString()}
+                        ฿{formatBaht(estimationResult.estimatedAdditionalTaxNeeded)}
                       </div>
                       <span className="text-[9px] text-slate-400 font-light block">
-                        (ยอดจริง ฿{estimationResult.estimatedTaxTotal.toLocaleString()} - จ่ายแล้ว ฿{incomeEst.taxAlreadyPaid.toLocaleString()})
+                        (ยอดจริง ฿{formatBaht(estimationResult.estimatedTaxTotal)} - จ่ายแล้ว ฿{formatBaht(incomeEst.taxAlreadyPaid)})
                       </span>
                     </div>
                   </div>
@@ -929,7 +1031,7 @@ export default function App() {
                     <span>มาตรา 35 (ค่าปรับอาญา)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับไม่เกิน {PIT_CRIMINAL_FINE_MAX.toLocaleString()} บาท
+                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับไม่เกิน {formatBaht(PIT_CRIMINAL_FINE_MAX, 0)} บาท
                     ขอลดค่าปรับได้ (จำนวนจริงเป็นไปตามที่เจ้าหน้าที่แจ้ง)
                   </p>
                 </div>
@@ -947,11 +1049,11 @@ export default function App() {
                 <div>
                   <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] mb-1">
                     <Percent className="w-3.5 h-3.5" />
-                    <span>มาตรา 27 (เงินเพิ่มสะสม)</span>
+                    <span>มาตรา 27 (เงินเพิ่ม)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
                     ต้องรับผิดเสียเงินเพิ่มร้อยละ 1.5 ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน)
-                    ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีต้น (อธิบดีไม่มีอำนาจงด/ลด)
+                    ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีที่ค้าง (อธิบดีไม่มีอำนาจงด/ลด)
                   </p>
                 </div>
                 <a
@@ -1037,7 +1139,7 @@ export default function App() {
                     <span>มาตรา 35 (ค่าปรับอาญา)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
-                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับไม่เกิน {PIT_CRIMINAL_FINE_MAX.toLocaleString()} บาท
+                    หากไม่ยื่นแบบแสดงรายการภาษีภายในเวลาที่กำหนด มีโทษปรับไม่เกิน {formatBaht(PIT_CRIMINAL_FINE_MAX, 0)} บาท
                     ขอลดค่าปรับได้ (จำนวนจริงเป็นไปตามที่เจ้าหน้าที่แจ้ง)
                   </p>
                 </div>
@@ -1055,11 +1157,11 @@ export default function App() {
                 <div>
                   <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] mb-1">
                     <Percent className="w-3.5 h-3.5" />
-                    <span>มาตรา 27 (เงินเพิ่มสะสม)</span>
+                    <span>มาตรา 27 (เงินเพิ่ม)</span>
                   </div>
                   <p className="text-[11px] leading-relaxed">
                     ต้องรับผิดเสียเงินเพิ่มร้อยละ 1.5 ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน) 
-                    ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีต้น (อธิบดีไม่มีอำนาจงด/ลด)
+                    ของภาษีค้างชำระ สูงสุดสะสมรวมไม่เกิน 100% ของภาษีที่ค้าง (อธิบดีไม่มีอำนาจงด/ลด)
                   </p>
                 </div>
                 <a
@@ -1262,7 +1364,7 @@ export default function App() {
                     </p>
                     <div className="space-y-1.5">
                       <label className="text-xs font-semibold text-slate-600">
-                        จำนวนเงินภาษีมูลค่าเพิ่มที่ต้องชำระสะสม / ยื่นเพิ่มเติม <span className="text-red-500">*</span>
+                        จำนวนภาษีมูลค่าเพิ่มที่ต้องชำระเพิ่ม <span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
                         <span className="absolute left-4 top-3 text-sm text-slate-400 font-semibold font-mono">฿</span>
@@ -1445,14 +1547,14 @@ export default function App() {
                       <div className="text-left space-y-0.5">
                         <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">สมการภาษีมูลค่าเพิ่มที่ต้องชำระ (ภ.พ.30)</span>
                         <div className="text-xs text-slate-600">
-                          ภาษีขาย <strong>฿{vatEstimationResult.outputVat.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong> - ภาษีซื้อ <strong>฿{vatEstimationResult.inputVat.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
+                          ภาษีขาย <strong>฿{formatBaht(vatEstimationResult.outputVat)}</strong> - ภาษีซื้อ <strong>฿{formatBaht(vatEstimationResult.inputVat)}</strong>
                         </div>
                       </div>
 
                       <div className="text-center md:text-right space-y-0.5">
                         <span className="text-[10px] text-slate-400 font-medium block">ประเมินภาษีมูลค่าเพิ่มค้างชำระสุทธิ</span>
                         <div className="text-lg font-extrabold text-indigo-700 font-mono">
-                          ฿{vatEstimationResult.netVatOwed.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                          ฿{formatBaht(vatEstimationResult.netVatOwed)}
                         </div>
                       </div>
                     </div>
@@ -1578,7 +1680,7 @@ export default function App() {
                           <span className="block text-slate-500 font-sans text-[10px] font-normal">{tier.label}</span>
                           <span className="block font-bold text-indigo-700">เหลือ {tier.pct}%</span>
                           <span className="block text-slate-400 font-sans text-[9px] font-normal">
-                            {vatScenario === 'voluntary_late' ? `ของเบี้ยปรับ (= ${tier.pct * 2}% ของภาษี)` : 'ของเบี้ยปรับ (= ของภาษี)'}
+                            {vatScenario === 'voluntary_late' ? `ของเบี้ยปรับ (= ${tier.pct * 2}% ของภาษี)` : `ของเบี้ยปรับ (= ${tier.pct}% ของภาษี)`}
                           </span>
                         </div>
                       ))}
@@ -1644,10 +1746,10 @@ export default function App() {
                     <div>
                       <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-[11px] mb-1">
                         <Building className="w-3.5 h-3.5" />
-                        <span>ระเบียบว่าด้วยการลดและงดเบี้ยปรับ</span>
+                        <span>ตัวอย่างการคำนวณเบี้ยปรับและเงินเพิ่ม ภ.พ.30</span>
                       </div>
                       <p className="text-[11px] leading-relaxed">
-                        ระเบียบกรมสรรพากรว่าด้วยการงดหรือลดเบี้ยปรับภาษีมูลค่าเพิ่มและภาษีธุรกิจเฉพาะ พ.ศ. 2561 และที่แก้ไขเพิ่มเติม
+                        ตัวอย่างจากกรมสรรพากร แสดงวิธีคิดเบี้ยปรับตามมาตรา 89(2), 89(3), 89(4) และเงินเพิ่มตามมาตรา 89/1
                       </p>
                     </div>
                     <a
@@ -1656,7 +1758,7 @@ export default function App() {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold pt-1 self-start"
                     >
-                      เปิดระเบียบกรมสรรพากร (9880) <ExternalLink className="w-2.5 h-2.5" />
+                      เปิดตัวอย่างที่ 1 บนเว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
                     </a>
                   </div>
 
@@ -1664,10 +1766,10 @@ export default function App() {
                     <div>
                       <div className="flex items-center gap-1.5 text-amber-700 font-bold text-[11px] mb-1">
                         <Percent className="w-3.5 h-3.5" />
-                        <span>มาตราความรับผิดและเบี้ยปรับ</span>
+                        <span>ตัวอย่างการคำนวณ (ต่อ)</span>
                       </div>
                       <p className="text-[11px] leading-relaxed">
-                        คำอธิบายข้อกฎหมายเกี่ยวกับเกณฑ์เสียภาษีค้างชำระ อัตราเบี้ยปรับ 1 เท่า / 2 เท่า และข้อยืดหยุ่นของเงินเพิ่ม 1.5%
+                        ตัวอย่างการยื่น ภ.พ.30 ทันกำหนดแล้วแก้ไขภายหลัง หรือถูกประเมิน พร้อมวิธีคิดเบี้ยปรับ 1 เท่า / 2 เท่า และเงินเพิ่ม 1.5% ต่อเดือน
                       </p>
                     </div>
                     <a
@@ -1676,7 +1778,7 @@ export default function App() {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-800 font-semibold pt-1 self-start"
                     >
-                      คำอธิบายกรมสรรพากร (9881) <ExternalLink className="w-2.5 h-2.5" />
+                      เปิดตัวอย่างที่ 2 บนเว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
                     </a>
                   </div>
 
@@ -1684,10 +1786,10 @@ export default function App() {
                     <div>
                       <div className="flex items-center gap-1.5 text-emerald-700 font-bold text-[11px] mb-1">
                         <FileText className="w-3.5 h-3.5" />
-                        <span>ท.ป. 200/2561 (งด/ลดเบี้ยปรับ)</span>
+                        <span>ท.ป. 81/2542 (งด/ลดเบี้ยปรับ)</span>
                       </div>
                       <p className="text-[11px] leading-relaxed">
-                        เกณฑ์ขอยกเว้นเบี้ยปรับแบบขั้นบันได 2% - 40% กรณีผู้เสียภาษีสมัครใจยื่นแบบเพิ่มเติมหรือล่าช้าด้วยตนเอง
+                        เกณฑ์งดหรือลดเบี้ยปรับ ภาษีเงินได้ ภ.พ.30 และภาษีธุรกิจเฉพาะ (ฉบับแก้ไขโดย ท.ป. 369/2569) เช่น ยื่นเองลดเหลือ 2% - 20% ของเบี้ยปรับ
                       </p>
                     </div>
                     <a
@@ -1696,7 +1798,7 @@ export default function App() {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-[10px] text-emerald-600 hover:text-emerald-800 font-semibold pt-1 self-start"
                     >
-                      เปิดระเบียบงด/ลดเบี้ยปรับ (3361) <ExternalLink className="w-2.5 h-2.5" />
+                      เปิดคำสั่งบนเว็บสรรพากร <ExternalLink className="w-2.5 h-2.5" />
                     </a>
                   </div>
                 </div>
@@ -1718,7 +1820,7 @@ export default function App() {
                 </div>
               </div>
               <div className="px-2.5 py-1 bg-white/10 rounded-xl text-right shrink-0 border border-white/5">
-                <span className="block text-[9px] text-slate-300 font-light">ค่าปรับ & เงินเพิ่ม</span>
+                <span className="block text-[9px] text-slate-300 font-light">ค่าปรับและเงินเพิ่มรวม</span>
                 <span className="text-xs font-bold text-rose-400 font-mono">
                   + <AnimatedNumber value={resultToUse.totalPenaltiesAndSurcharges} prefix="฿" />
                 </span>
@@ -1728,13 +1830,13 @@ export default function App() {
             {/* แถบสรุปแจกแจงแบบกวาดสายตา */}
             <div className="grid grid-cols-2 gap-2 bg-black/20 p-3 rounded-xl border border-white/5 text-xs font-mono">
               <div className="space-y-0.5">
-                <span className="text-[10px] text-slate-400 font-light block">ยอดภาษีต้นสะสม:</span>
+                <span className="text-[10px] text-slate-400 font-light block">ภาษีที่ค้างชำระ:</span>
                 <span className="text-slate-200 font-semibold">
                   <AnimatedNumber value={resultToUse.taxOwed} prefix="฿" />
                 </span>
               </div>
               <div className="space-y-0.5 text-right">
-                <span className="text-[10px] text-slate-400 font-light block">รวมค่าปรับทางอาญา:</span>
+                <span className="text-[10px] text-slate-400 font-light block">ค่าปรับอาญา:</span>
                 <span className="text-indigo-300 font-semibold">
                   <AnimatedNumber value={resultToUse.criminalFine} prefix="฿" />
                 </span>
@@ -1749,10 +1851,19 @@ export default function App() {
               <div className="p-3 bg-emerald-500/15 border border-emerald-500/25 rounded-xl flex items-start gap-2 text-xs animate-fadeIn">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="space-y-0.5 text-emerald-100">
-                  <span className="font-bold text-white block">ประหยัดเบี้ยปรับจากเกณฑ์ผ่อนปรน!</span>
+                  <span className="font-bold text-white block">
+                    {resultToUse.penaltyOriginal === 0 ? 'ยื่นเอง ไม่มีเบี้ยปรับ' : 'ยื่นเอง ได้รับการลดเบี้ยปรับ'}
+                  </span>
                   <p className="font-light leading-relaxed text-[11px]">
-                    ยื่นเพิ่มเติมสมัครใจเบี้ยปรับจึงได้รับการงดเว้นหรือลดหย่อนพิเศษเป็น <strong className="text-emerald-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong> 
-                    {activeTab === 'pit' ? ' (ไม่มีเบี้ยปรับเมื่อยื่นเอง)' : ` (ตามเกณฑ์ลดเบี้ยปรับ เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย)`} จากเดิมสูงสุดถึง <AnimatedNumber value={resultToUse.penaltyOriginal} prefix="฿" className="font-semibold" />
+                    {resultToUse.penaltyOriginal === 0 ? (
+                      <>ภาษีเงินได้บุคคลธรรมดาที่ยื่นเอง (ก่อนถูกเรียกตรวจ) ไม่มีเบี้ยปรับ เสียเฉพาะเงินเพิ่มและค่าปรับอาญา (ถ้ามี)</>
+                    ) : (
+                      <>
+                        เบี้ยปรับเต็มตามกฎหมายคือ <AnimatedNumber value={resultToUse.penaltyOriginal} prefix="฿" className="font-semibold" /> ลดเหลือ {resultToUse.penaltyDiscountPercent}% จึงจ่าย{' '}
+                        <strong className="text-emerald-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong>{' '}
+                        (ประหยัดได้ <AnimatedNumber value={resultToUse.penaltyOriginal - resultToUse.penaltyReduced} prefix="฿" />)
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
@@ -1764,7 +1875,7 @@ export default function App() {
                     {resultToUse.penaltyDiscountPercent >= 100 ? 'มีเบี้ยปรับเต็มอัตราจากการประเมิน' : 'มีเบี้ยปรับจากการประเมิน (หลังได้รับการลด)'}
                   </span>
                   <p className="font-light leading-relaxed text-[11px]">
-                    โดนเรียกปรับเนื่องจากเจ้าหน้าที่ตรวจพบประเมินภาษีเป็นจำนวน <strong className="text-rose-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong>
+                    เจ้าหน้าที่ตรวจพบและประเมินภาษี เบี้ยปรับที่ต้องจ่ายคือ <strong className="text-rose-400"><AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" /></strong>
                     ({resultToUse.penaltyMultiplier} เท่าของภาษี{resultToUse.penaltyDiscountPercent < 100 ? ` ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : ' ยังไม่ได้รับการลด'})
                   </p>
                 </div>
@@ -1817,8 +1928,8 @@ export default function App() {
                     {!resultToUse.criminalFineApplies
                       ? 'ยื่นในเวลาปกติ (ไม่มีค่าปรับ)'
                       : resultToUse.criminalFine > 0
-                        ? `ตามที่สรรพากรแจ้ง${resultToUse.criminalFineMax !== null ? ` (ไม่เกิน ${resultToUse.criminalFineMax.toLocaleString()} บาทตาม ม.35)` : ''}`
-                        : `ยังไม่รวมในยอด: กรอกจำนวนที่สรรพากรแจ้งในช่องค่าปรับอาญา${resultToUse.criminalFineMax !== null ? ` (ไม่เกิน ${resultToUse.criminalFineMax.toLocaleString()} บาท)` : ''}`}
+                        ? `ตามที่สรรพากรแจ้ง${resultToUse.criminalFineMax !== null ? ` (ไม่เกิน ${formatBaht(resultToUse.criminalFineMax, 0)} บาทตาม ม.35)` : ''}`
+                        : `ยังไม่รวมในยอด: กรอกจำนวนที่สรรพากรแจ้งในช่องค่าปรับอาญา${resultToUse.criminalFineMax !== null ? ` (ไม่เกิน ${formatBaht(resultToUse.criminalFineMax, 0)} บาท)` : ''}`}
                   </span>
                 </div>
                 <span className="font-semibold text-indigo-600 font-mono">
@@ -1829,10 +1940,10 @@ export default function App() {
               {/* รายการ 3: เงินเพิ่ม */}
               <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
                 <div className="space-y-0.5">
-                  <span className="font-bold text-slate-800 block">3. เงินเพิ่มสะสม ({activeTab === 'pit' ? 'ม. 27' : 'ม. 89/1'})</span>
+                  <span className="font-bold text-slate-800 block">3. เงินเพิ่ม ({activeTab === 'pit' ? 'ม. 27' : 'ม. 89/1'})</span>
                   <span className="text-[10px] text-slate-400 font-light leading-tight block">
                     {resultToUse.monthsLate === 0 
-                      ? 'ไม่มีเงินเพิ่มสะสม' 
+                      ? 'ไม่มีเงินเพิ่ม' 
                       : `คิด 1.5% ต่อเดือน x ${resultToUse.monthsLate} เดือน = ${(1.5 * resultToUse.monthsLate).toFixed(1)}%`}
                     {resultToUse.surcharge === resultToUse.taxOwed && ' (เต็มเพดานสูงสุด 100% ของตัวภาษีแล้ว)'}
                   </span>
@@ -1864,6 +1975,30 @@ export default function App() {
 
             </div>
 
+            <details className="group bg-slate-50/60 border border-slate-100 rounded-xl p-3 text-[11px] text-slate-600 leading-relaxed">
+              <summary className="cursor-pointer font-semibold text-slate-700 select-none">
+                อ่านผลลัพธ์อย่างไร (ความหมายของแต่ละรายการ)
+              </summary>
+              <dl className="mt-2 space-y-1.5 font-light">
+                <div>
+                  <dt className="inline font-semibold text-slate-700">ภาษีที่ค้างชำระ </dt>
+                  <dd className="inline">คือภาษีที่ต้องจ่ายเพิ่มตามจริง (ยังไม่รวมค่าปรับใดๆ)</dd>
+                </div>
+                <div>
+                  <dt className="inline font-semibold text-slate-700">เงินเพิ่ม </dt>
+                  <dd className="inline">คล้ายดอกเบี้ยตามกฎหมาย 1.5% ต่อเดือน นับจากวันครบกำหนดจนถึงวันที่จ่าย (เศษของเดือนนับเป็น 1 เดือน) และรวมกันไม่เกินยอดภาษี</dd>
+                </div>
+                <div>
+                  <dt className="inline font-semibold text-slate-700">เบี้ยปรับ </dt>
+                  <dd className="inline">โทษทางภาษีเมื่อยื่นไม่ครบหรือไม่ยื่น คิดเป็น 1 เท่าหรือ 2 เท่าของภาษี และมีสิทธิ์ขอลดได้ตามเงื่อนไข ภาษีเงินได้บุคคลธรรมดาที่ยื่นเองไม่มีเบี้ยปรับ</dd>
+                </div>
+                <div>
+                  <dt className="inline font-semibold text-slate-700">ค่าปรับอาญา </dt>
+                  <dd className="inline">ค่าปรับเพื่อระงับคดีอาญา เมื่อยื่นแบบล่าช้า จำนวนจริงตามที่เจ้าหน้าที่สรรพากรแจ้ง (ภ.ง.ด. ไม่เกิน 2,000 บาท) จึงให้กรอกเองในช่องด้านซ้าย</dd>
+                </div>
+              </dl>
+            </details>
+
             <p className="text-[10px] text-slate-400 font-light leading-relaxed">
               ผลลัพธ์เป็นการประมาณการ การลดเบี้ยปรับเป็นดุลพินิจของเจ้าพนักงานและมีเงื่อนไขตามคำสั่งกรมสรรพากร
               อ้างอิง {LEGAL_BASIS.directive}{' '}
@@ -1872,6 +2007,8 @@ export default function App() {
               </a>{' '}
               (ตรวจสอบล่าสุด {LEGAL_BASIS.checkedOn}) ควรยืนยันกับเจ้าหน้าที่ก่อนชำระจริง
             </p>
+
+            <SaveExportBar onSave={handleSaveRecord} onExport={handleExportCurrent} />
 
             {/* เครื่องมือจัดการข้อมูลและพิมพ์รายงาน */}
             <div className="pt-3 border-t border-slate-100/80 no-print">
@@ -1909,10 +2046,10 @@ export default function App() {
                     className="overflow-hidden bg-slate-50/50 p-3 rounded-b-xl border-x border-b border-slate-100 text-[10px] text-slate-500 space-y-2 leading-relaxed"
                   >
                     <p>
-                      <strong>ค่าภาษีต้น</strong>: คิดเงินได้สุทธิ = รายได้สะสม - ค่าใช้จ่าย - ค่าลดหย่อน แล้วนำไปคูณอัตราภาษีแบบก้าวหน้าของประเทศไทย (5% - 35%)
+                      <strong>ภาษีที่ต้องชำระ</strong>: คิดเงินได้สุทธิ = รายได้ทั้งปี - ค่าใช้จ่าย - ค่าลดหย่อน แล้วนำไปคูณอัตราภาษีแบบก้าวหน้าของประเทศไทย (5% - 35%)
                     </p>
                     <p>
-                      <strong>สูตรเงินเพิ่มสะสม</strong>: <code className="bg-slate-100 px-1 rounded font-mono text-slate-700">ภาษีค้าง × 1.5% × จำนวนเดือนล่าช้า</code> โดยเศษของเดือนให้ปัดเป็น 1 เดือน และเพดานสูงสุดห้ามนำส่งเงินเพิ่มเกินตัวเงินภาษีค้างหลัก
+                      <strong>สูตรเงินเพิ่ม</strong>: <code className="bg-slate-100 px-1 rounded font-mono text-slate-700">ภาษีค้าง × 1.5% × จำนวนเดือนล่าช้า</code> โดยเศษของเดือนให้ปัดเป็น 1 เดือน และเพดานสูงสุดห้ามนำส่งเงินเพิ่มเกินตัวเงินภาษีค้างหลัก
                     </p>
                     <p>
                       <strong>สูตรเบี้ยปรับ</strong>: <code className="bg-slate-100 px-1 rounded font-mono text-slate-700">ภาษีค้าง × อัตราเบี้ยปรับตามประเมิน × เปอร์เซ็นต์หลังลดหย่อน</code>
@@ -1924,18 +2061,30 @@ export default function App() {
           </div>
 
           {/* ป้ายเตือนหรือข้อเสนอแนะเพิ่มเติม */}
-          {taxOwedToUse > 0 && scenario !== FilingScenario.VOLUNTARY && (
+          {activeTab === 'pit' && taxOwedToUse > 0 && scenario !== FilingScenario.VOLUNTARY && (
             <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200/80 flex items-start gap-2.5">
               <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <span className="text-xs font-bold text-amber-900 block">คำเตือนทางเลือกสรรพากร</span>
                 <p className="text-[11px] text-amber-800 font-light leading-relaxed">
-                  หากตรวจพบเจอข้อมูลรายได้ผิดพลาดหรือตกหล่น แนะนำให้รีบทำการ <strong>"ยื่นเพิ่มเติมด้วยตนเอง" (Voluntary)</strong> ก่อนที่เจ้าหน้าที่สรรพากรจะมีจดหมายส่งมาแจ้งประเมิน เพื่อรับสิทธิ์ยกเว้นเบี้ยปรับ (0%) และเสียเฉพาะเงินเพิ่มล่าช้า 1.5% ต่อเดือนเท่านั้น!
+                  หากตรวจพบเจอข้อมูลรายได้ผิดพลาดหรือตกหล่น แนะนำให้รีบทำการ <strong>"ยื่นเพิ่มเติมด้วยตนเอง" (Voluntary)</strong> ก่อนที่เจ้าหน้าที่สรรพากรจะมีจดหมายส่งมาแจ้งประเมิน เพื่อไม่ต้องเสียเบี้ยปรับ (0%) เสียเฉพาะเงินเพิ่ม 1.5% ต่อเดือนและค่าปรับอาญา (ถ้ามี)
                 </p>
               </div>
             </div>
           )}
 
+        </section>
+
+        {/* ประวัติการคำนวณ (เต็มความกว้าง) */}
+        <section className="lg:col-span-12">
+          <HistoryPanel
+            records={history}
+            onLoad={handleLoadRecord}
+            onDelete={handleDeleteRecord}
+            onClear={handleClearHistory}
+            onExportAll={() => exportHistoryToExcel(history)}
+            onExportOne={(r) => exportRecordToExcel(r)}
+          />
         </section>
 
       </main>
@@ -2045,9 +2194,9 @@ export default function App() {
                     
                     {/* Item 1 */}
                     <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
-                      <span className="text-slate-600">1. ยอดภาษีต้นค้างชำระ (Tax Owed)</span>
+                      <span className="text-slate-600">1. ภาษีที่ค้างชำระ (Tax Owed)</span>
                       <span className="font-mono font-semibold text-slate-800">
-                        ฿{resultToUse.taxOwed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ฿{formatBaht(resultToUse.taxOwed)}
                       </span>
                     </div>
 
@@ -2059,23 +2208,23 @@ export default function App() {
                           {resultToUse.criminalFineApplies && resultToUse.criminalFine === 0
                             ? 'ยังไม่รวมในยอด (ผู้ใช้ยังไม่ได้กรอกจำนวนที่สรรพากรแจ้ง)'
                             : resultToUse.criminalFineMax !== null
-                              ? `ตามที่สรรพากรแจ้ง ไม่เกิน ${resultToUse.criminalFineMax.toLocaleString()} บาท (ม.35)`
+                              ? `ตามที่สรรพากรแจ้ง ไม่เกิน ${formatBaht(resultToUse.criminalFineMax, 0)} บาท (ม.35)`
                               : 'ตามที่สรรพากรแจ้ง'}
                         </span>
                       </div>
                       <span className="font-mono font-semibold text-indigo-600">
-                        ฿{resultToUse.criminalFine.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ฿{formatBaht(resultToUse.criminalFine)}
                       </span>
                     </div>
 
                     {/* Item 3 */}
                     <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
                       <div>
-                        <span className="text-slate-600">3. เงินเพิ่มสะสม (Surcharge) {activeTab === 'pit' ? 'ม. 27' : 'ม. 89/1'}</span>
+                        <span className="text-slate-600">3. เงินเพิ่ม (Surcharge) {activeTab === 'pit' ? 'ม. 27' : 'ม. 89/1'}</span>
                         <span className="text-[9px] text-slate-400 block font-light">อัตรา 1.5% ต่อเดือน (คำนวณ {resultToUse.monthsLate} เดือน)</span>
                       </div>
                       <span className="font-mono font-semibold text-amber-600">
-                        ฿{resultToUse.surcharge.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ฿{formatBaht(resultToUse.surcharge)}
                       </span>
                     </div>
 
@@ -2090,15 +2239,15 @@ export default function App() {
                         </span>
                       </div>
                       <span className="font-mono font-semibold text-rose-600">
-                        ฿{resultToUse.penaltyReduced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ฿{formatBaht(resultToUse.penaltyReduced)}
                       </span>
                     </div>
 
                     {/* Total */}
                     <div className="flex justify-between items-center pt-3 pb-1 border-t border-slate-300 font-extrabold text-sm text-slate-900">
-                      <span>ยอดรวมที่ต้องชำระสะสม (Total)</span>
+                      <span>ยอดรวมที่ต้องชำระ (Total)</span>
                       <span className="font-mono text-emerald-600">
-                        ฿{resultToUse.totalToPay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ฿{formatBaht(resultToUse.totalToPay)}
                       </span>
                     </div>
 
@@ -2106,7 +2255,7 @@ export default function App() {
                     <div className="bg-emerald-50 text-emerald-800 text-[10px] p-2.5 rounded-xl border border-emerald-100 flex items-center gap-1.5 mt-2">
                       <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
                       <span>
-                        คุณประหยัดเงินค่าปรับไปได้ <strong>฿{(resultToUse.penaltyOriginal - resultToUse.penaltyReduced).toLocaleString()}</strong> บาท จากการลดหย่อน/ยกเว้นตามกฎระเบียบ
+                        ประหยัดเบี้ยปรับได้ <strong>฿{formatBaht(resultToUse.penaltyOriginal - resultToUse.penaltyReduced)}</strong> บาท จากการลดหย่อน/ยกเว้นตามกฎระเบียบ
                       </span>
                     </div>
                   </div>

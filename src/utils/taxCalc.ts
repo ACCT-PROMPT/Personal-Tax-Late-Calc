@@ -46,6 +46,11 @@ export const LEGAL_BASIS = {
 // เพดานค่าปรับอาญากรณีไม่ยื่น/ยื่นแบบ ภ.ง.ด.ล่าช้า ตามมาตรา 35 แห่งประมวลรัษฎากร
 export const PIT_CRIMINAL_FINE_MAX = 2000;
 
+// ปัดเศษเป็นสตางค์ (2 ตำแหน่ง) ให้ยอดรวมตรงกับผลรวมของรายการที่แสดง และตรงกับใน Excel
+export function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 // ค่าปรับอาญา = จำนวนที่ผู้ใช้กรอกตามที่สรรพากรแจ้ง (ไม่กรอกถือเป็น 0) ไม่เกินเพดาน (ถ้ามี)
 function resolveCriminalFine(applies: boolean, entered: number, max: number | null): number {
   if (!applies || !(entered > 0)) return 0;
@@ -122,7 +127,7 @@ export function calculateTaxPenalties(
   let surcharge = 0;
   if (taxOwed > 0 && monthsLate > 0) {
     const calculatedSurcharge = taxOwed * 0.015 * monthsLate;
-    surcharge = Math.min(calculatedSurcharge, taxOwed); // ห้ามเกินจำนวนเงินภาษีที่ค้างชำระ
+    surcharge = round2(Math.min(calculatedSurcharge, taxOwed)); // ห้ามเกินจำนวนเงินภาษีที่ค้างชำระ
   }
 
   // 4. คำนวณเบี้ยปรับ (Penalty)
@@ -133,7 +138,7 @@ export function calculateTaxPenalties(
     penaltyMultiplier = 2.0; // ไม่ได้ยื่นแบบเลย โดน 2 เท่า
   }
 
-  const penaltyOriginal = taxOwed * penaltyMultiplier;
+  const penaltyOriginal = round2(taxOwed * penaltyMultiplier);
 
   // เปอร์เซ็นต์ของเบี้ยปรับที่ต้องจ่ายจริง
   // ท.ป. 81/2542 ข้อ 4: ลดได้ตามดุลพินิจแต่ต้องเสียไม่น้อยกว่า 50% (ไม่มีตารางตามช่วงวัน)
@@ -144,11 +149,11 @@ export function calculateTaxPenalties(
     penaltyDiscountPercent = 50;
   }
 
-  const penaltyReduced = (penaltyOriginal * penaltyDiscountPercent) / 100;
+  const penaltyReduced = round2((penaltyOriginal * penaltyDiscountPercent) / 100);
 
   // 5. สรุปยอดรวม
-  const totalPenaltiesAndSurcharges = criminalFine + surcharge + penaltyReduced;
-  const totalToPay = taxOwed + totalPenaltiesAndSurcharges;
+  const totalPenaltiesAndSurcharges = round2(criminalFine + surcharge + penaltyReduced);
+  const totalToPay = round2(taxOwed + totalPenaltiesAndSurcharges);
 
   return {
     taxOwed,
@@ -374,23 +379,23 @@ export function calculateVatPenalties(
   let surcharge = 0;
   if (taxOwed > 0 && monthsLate > 0) {
     const calculatedSurcharge = taxOwed * 0.015 * monthsLate;
-    surcharge = Math.min(calculatedSurcharge, taxOwed);
+    surcharge = round2(Math.min(calculatedSurcharge, taxOwed));
   }
 
   // 3. เบี้ยปรับ (Penalty)
   // เบี้ยปรับตามกฎหมาย: ยื่นไม่ครบ (ม.89(4)) 1 เท่า / ไม่ยื่นแบบ (ม.89(3)) 2 เท่า ของภาษี
   const penaltyMultiplier =
     scenario === 'voluntary_additional' || scenario === 'assessed_incorrect' ? 1.0 : 2.0;
-  const penaltyOriginal = taxOwed * penaltyMultiplier;
+  const penaltyOriginal = round2(taxOwed * penaltyMultiplier);
 
   // % ของเบี้ยปรับตามกฎหมายที่ต้องเสีย
   const penaltyDiscountPercent = isAssessed
     ? VAT_ASSESSED_PERCENT[assessedReduction]
     : vatVoluntaryPenaltyPercent(diffDays);
-  const penaltyReduced = (penaltyOriginal * penaltyDiscountPercent) / 100;
+  const penaltyReduced = round2((penaltyOriginal * penaltyDiscountPercent) / 100);
 
-  const totalPenaltiesAndSurcharges = criminalFine + surcharge + penaltyReduced;
-  const totalToPay = taxOwed + totalPenaltiesAndSurcharges;
+  const totalPenaltiesAndSurcharges = round2(criminalFine + surcharge + penaltyReduced);
+  const totalToPay = round2(taxOwed + totalPenaltiesAndSurcharges);
 
   return {
     taxOwed,

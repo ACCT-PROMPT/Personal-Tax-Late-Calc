@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatBaht } from '../utils/format';
 import { motion } from 'motion/react';
 
 interface BracketBreakdownItem {
@@ -21,7 +22,7 @@ export default function ProgressiveTaxBar({ netIncome, bracketBreakdown, totalTa
     <div className="p-4 bg-white/60 backdrop-blur-sm border border-slate-100 rounded-2xl space-y-3">
       <div className="flex justify-between items-center">
         <span className="text-xs font-semibold text-slate-700">ฐานภาษีและอัตราภาษีที่เสียจริง</span>
-        <span className="text-xs text-slate-500 font-mono">เงินได้สุทธิ: ฿{netIncome.toLocaleString()}</span>
+        <span className="text-xs text-slate-500 font-mono">เงินได้สุทธิ: ฿{formatBaht(netIncome)}</span>
       </div>
 
       {/* แถบสีจำลองอัตราภาษีสะสม */}
@@ -50,7 +51,7 @@ export default function ProgressiveTaxBar({ netIncome, bracketBreakdown, totalTa
               initial={{ width: 0 }}
               animate={{ width: `${widthPercent}%` }}
               transition={{ duration: 0.6, ease: 'easeOut', delay: idx * 0.05 }}
-              title={`${item.bracketName} (${item.rate * 100}%): ฿${item.incomeInBracket.toLocaleString()}`}
+              title={`${item.bracketName} (${item.rate * 100}%): ฿${formatBaht(item.incomeInBracket)}`}
             />
           );
         })}
@@ -80,8 +81,8 @@ export default function ProgressiveTaxBar({ netIncome, bracketBreakdown, totalTa
                 </span>
               </div>
               <div className="text-right font-mono">
-                <span className="text-slate-500 mr-2">฿{item.incomeInBracket.toLocaleString()}</span>
-                <span className="font-semibold text-slate-800">฿{item.tax.toLocaleString()}</span>
+                <span className="text-slate-500 mr-2">฿{formatBaht(item.incomeInBracket)}</span>
+                <span className="font-semibold text-slate-800">฿{formatBaht(item.tax)}</span>
               </div>
             </div>
           );
@@ -89,8 +90,8 @@ export default function ProgressiveTaxBar({ netIncome, bracketBreakdown, totalTa
       </div>
 
       <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-xs font-medium text-slate-700">
-        <span>ภาษีสะสมรวมแบบก้าวหน้า:</span>
-        <span className="text-sm font-bold text-slate-800">฿{totalTax.toLocaleString()}</span>
+        <span>ภาษีรวมตามอัตราก้าวหน้า:</span>
+        <span className="text-sm font-bold text-slate-800">฿{formatBaht(totalTax)}</span>
       </div>
     </div>
   );

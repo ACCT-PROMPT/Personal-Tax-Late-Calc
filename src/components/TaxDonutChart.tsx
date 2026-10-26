@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatBaht } from '../utils/format';
 import { motion } from 'motion/react';
 
 interface DonutChartProps {
@@ -37,7 +38,7 @@ export default function TaxDonutChart({ tax, surcharge, criminalFine, penalty }:
   const offsetPenalty = offsetCriminal - (circumference * pCriminal) / 100;
 
   const data = [
-    { label: 'ภาษีต้น', value: tax, percent: pTax, color: 'stroke-emerald-500', bg: 'bg-emerald-500' },
+    { label: 'ภาษีที่ค้างชำระ', value: tax, percent: pTax, color: 'stroke-emerald-500', bg: 'bg-emerald-500' },
     { label: 'เงินเพิ่ม (1.5%/เดือน)', value: surcharge, percent: pSurcharge, color: 'stroke-amber-500', bg: 'bg-amber-500' },
     { label: 'เบี้ยปรับ', value: penalty, percent: pPenalty, color: 'stroke-rose-500', bg: 'bg-rose-500' },
     { label: 'ค่าปรับอาญา', value: criminalFine, percent: pCriminal, color: 'stroke-indigo-500', bg: 'bg-indigo-500' },
@@ -57,7 +58,7 @@ export default function TaxDonutChart({ tax, surcharge, criminalFine, penalty }:
             strokeWidth={strokeWidth}
           />
           
-          {/* ชิ้นที่ 1: ภาษีต้น */}
+          {/* ชิ้นที่ 1: ภาษีที่ค้างชำระ */}
           {tax > 0 && (
             <motion.circle
               cx="80"
@@ -127,7 +128,7 @@ export default function TaxDonutChart({ tax, surcharge, criminalFine, penalty }:
 
         {/* ข้อความตรงกลาง */}
         <div className="absolute text-center">
-          <span className="block text-xs font-medium text-slate-400">ค่าปรับ & เงินเพิ่ม</span>
+          <span className="block text-xs font-medium text-slate-400">ค่าปรับและเงินเพิ่มรวม</span>
           <span className="block text-sm font-semibold text-rose-600">
             {(( (surcharge + penalty + criminalFine) / total) * 100).toFixed(0)}%
           </span>
@@ -149,7 +150,7 @@ export default function TaxDonutChart({ tax, surcharge, criminalFine, penalty }:
               </div>
               <div className="flex items-center gap-1.5 shrink-0 font-mono text-right">
                 <span className="text-xs font-bold text-slate-800">
-                  ฿{item.value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                  ฿{formatBaht(item.value)}
                 </span>
                 <span className="text-[10px] text-slate-400">
                   ({item.percent.toFixed(1)}%)
