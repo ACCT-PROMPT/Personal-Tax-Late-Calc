@@ -61,6 +61,8 @@ export interface HistoryInputs {
   paymentDate: string;
   taxOwed: number;
   criminalFineEntered: number;
+  filingDate?: string; // วันที่ยื่นแบบ (ไม่มี = ยื่นและชำระวันเดียวกัน)
+  customDeadline?: string; // วันครบกำหนดที่กำหนดเอง
   // ภ.ง.ด.90/91
   taxYearTh?: number;
   scenario?: FilingScenario;
@@ -70,6 +72,25 @@ export interface HistoryInputs {
   vatYearTh?: number;
   vatScenario?: VatScenario;
   vatAssessedReduction?: VatAssessedReduction;
+  vatMultiplier?: 'auto' | 1 | 2;
+}
+
+// สรุปที่มาของภาษี เมื่อใช้ตัวช่วยคำนวณรายได้ (ใช้สร้างแผ่น "ที่มาของภาษี" ใน Excel)
+export interface EstimateSnapshot {
+  lines: { title: string; section: string; amount: number; basis: string; expense: number; net: number }[];
+  allowances: { label: string; claimed: number; allowed: number; capNote: string }[];
+  assessableIncome: number;
+  totalExpenses: number;
+  totalAllowances: number;
+  netIncome: number;
+  progressiveTax: number;
+  minTaxBase: number;
+  minTax: number;
+  minTaxApplies: boolean;
+  taxTotal: number;
+  credits: number;
+  additionalTax: number;
+  refund: number;
 }
 
 export interface HistoryRecord {
@@ -85,6 +106,7 @@ export interface HistoryRecord {
   deadline: string; // ISO วันที่ครบกำหนด
   inputs: HistoryInputs;
   result: ResultSnapshot;
+  estimate?: EstimateSnapshot; // มีเมื่อภาษีที่ค้างมาจากตัวช่วยคำนวณรายได้
 }
 
 export function loadHistory(): HistoryRecord[] {

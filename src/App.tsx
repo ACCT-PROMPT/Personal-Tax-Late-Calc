@@ -34,7 +34,6 @@ import {
   FilingScenario,
   PenaltyReduction,
   VatAssessedReduction,
-  IncomeEstimation,
 } from './types';
 
 import {
@@ -42,8 +41,6 @@ import {
   LEGAL_BASIS,
   PIT_CRIMINAL_FINE_MAX,
   calculateTaxPenalties,
-  estimateMissingTax,
-  calculateProgressiveTax,
   calculateVatPenalties,
   getVatDeadline
 } from './utils/taxCalc';
@@ -69,7 +66,9 @@ import { exportRecordToExcel, exportHistoryToExcel } from './utils/excel';
 import SaveExportBar from './components/SaveExportBar';
 import HistoryPanel from './components/HistoryPanel';
 import TaxDonutChart from './components/TaxDonutChart';
-import ProgressiveTaxBar from './components/ProgressiveTaxBar';
+import IncomeEstimator from './components/IncomeEstimator';
+import DateOptions from './components/DateOptions';
+import { IncomeEstimateInput, estimateIncomeTax, defaultEstimateInput } from './utils/incomeTax';
 import { AnimatedNumber } from './components/AnimatedNumber';
 
 // ช่องกรอกค่าปรับอาญา: กรมสรรพากรไม่ได้ประกาศตารางตายตัว ให้กรอกตามจำนวนที่สรรพากรแจ้งจริง
@@ -141,6 +140,17 @@ export default function App() {
   const [vatAssessedReduction, setVatAssessedReduction] = useState<VatAssessedReduction>('NONE');
   // ประวัติการคำนวณ (เก็บใน localStorage ของเครื่องนี้)
   const [history, setHistory] = useState<HistoryRecord[]>(() => loadHistory());
+  // วันที่ยื่นแบบ (แยกจากวันที่ชำระ) และวันครบกำหนดที่กำหนดเอง
+  const [pitFilingSame, setPitFilingSame] = useState<boolean>(true);
+  const [pitFilingDate, setPitFilingDate] = useState<string>('2026-06-29');
+  const [pitCustomOn, setPitCustomOn] = useState<boolean>(false);
+  const [pitCustomDeadline, setPitCustomDeadline] = useState<string>('');
+  const [vatFilingSame, setVatFilingSame] = useState<boolean>(true);
+  const [vatFilingDate, setVatFilingDate] = useState<string>('2026-06-29');
+  const [vatCustomOn, setVatCustomOn] = useState<boolean>(false);
+  const [vatCustomDeadline, setVatCustomDeadline] = useState<string>('');
+  // เบี้ยปรับ ภ.พ.30 กี่เท่าตามหนังสือประเมิน: 'auto' = ตามลักษณะที่เลือก
+  const [vatMultiplier, setVatMultiplier] = useState<'auto' | 1 | 2>('auto');
   
   // วันที่คาดว่าจะยื่นชำระจริง (Default เป็นวันนี้ 2026-06-29 ตาม metadata)
   const [paymentDate, setPaymentDate] = useState<string>('2026-06-29');
@@ -149,15 +159,7 @@ export default function App() {
   const [taxOwedInput, setTaxOwedInput] = useState<string>('5,000');
 
   // รายละเอียดสำหรับการประเมินรายได้เพื่อคำนวณภาษีขาด
-  const [incomeEst, setIncomeEst] = useState<IncomeEstimation>({
-    income40_1: 480000, // สมมติเงินเดือน 40,000 บาท/เดือน ทั้งปี = 480,000
-    incomeOther: 0,
-    expenseMethod: 'standard',
-    expenses: 0,
-    personalAllowance: 60000,
-    otherAllowances: 15000, // เช่น ประกันสังคม
-    taxAlreadyPaid: 8500,  // หัก ณ ที่จ่ายสะสม
-  });
+  const [incomeEst, setIncomeEst] = useState<IncomeEstimateInput>(() => defaultEstimateInput());
 
   // ใช้สำหรับเปิด/ปิด สรุปขั้นตอนคำนวณอย่างย่อ
   const [showFormulaInfo, setShowFormulaInfo] = useState<boolean>(false);
@@ -283,7 +285,7 @@ export default function App() {
 
   // คำนวณตัวเลขทางภาษีขั้นต้น (กรณีเลือกโหมดประเมินรายได้)
   const estimationResult = useMemo(() => {
-    return estimateMissingTax(incomeEst);
+    return estimateIncomeTax(incomeEst);
   }, [incomeEst]);
 
   // ยอดภาษีค้างชำระที่จะนำไปคิดค่าปรับจริง
@@ -292,9 +294,15 @@ export default function App() {
       const parsed = parseFloat(taxOwedInput.replace(/,/g, ''));
       return isNaN(parsed) || parsed < 0 ? 0 : parsed;
     } else {
-      return estimationResult.estimatedAdditionalTaxNeeded;
+      return estimationResult.additionalTax;
     }
   }, [taxOwedMode, taxOwedInput, estimationResult]);
+
+  const isIso = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const pitDeadlineOverride = pitCustomOn && isIso(pitCustomDeadline) ? pitCustomDeadline : undefined;
+  const pitFilingArg = !pitFilingSame && isIso(pitFilingDate) ? pitFilingDate : undefined;
+  const vatDeadlineOverride = vatCustomOn && isIso(vatCustomDeadline) ? vatCustomDeadline : undefined;
+  const vatFilingArg = !vatFilingSame && isIso(vatFilingDate) ? vatFilingDate : undefined;
 
   // คำนวณเบี้ยปรับ เงินเพิ่ม และค่าปรับทั้งหมด
   const calculationResult = useMemo(() => {
@@ -305,9 +313,11 @@ export default function App() {
       scenario,
       reduction,
       paymentDate,
-      parseMoney(pitCriminalFineInput)
+      parseMoney(pitCriminalFineInput),
+      pitFilingArg,
+      pitDeadlineOverride
     );
-  }, [taxOwedToUse, taxYearTh, filingMethod, scenario, reduction, paymentDate, pitCriminalFineInput]);
+  }, [taxOwedToUse, taxYearTh, filingMethod, scenario, reduction, paymentDate, pitCriminalFineInput, pitFilingArg, pitDeadlineOverride]);
 
   // === สำหรับหน้าภาษีมูลค่าเพิ่ม (VAT) ===
   const vatEstimationResult = useMemo(() => {
@@ -357,36 +367,33 @@ export default function App() {
       vatScenario,
       vatPaymentDate,
       parseMoney(vatCriminalFineInput),
-      vatAssessedReduction
+      vatAssessedReduction,
+      vatFilingArg,
+      vatDeadlineOverride,
+      vatMultiplier === 'auto' ? undefined : vatMultiplier
     );
-  }, [vatOwedToUse, vatMonth, vatYearTh, vatFilingMethod, vatScenario, vatPaymentDate, vatCriminalFineInput, vatAssessedReduction]);
+  }, [vatOwedToUse, vatMonth, vatYearTh, vatFilingMethod, vatScenario, vatPaymentDate, vatCriminalFineInput, vatAssessedReduction, vatFilingArg, vatDeadlineOverride, vatMultiplier]);
 
-  const vatDeadline = useMemo(() => {
+  const vatStandardDeadline = useMemo(() => {
     return getVatDeadline(vatMonth, vatYearTh, vatFilingMethod);
   }, [vatMonth, vatYearTh, vatFilingMethod]);
+  const vatDeadline = vatDeadlineOverride || vatStandardDeadline;
 
   // ข้อมูลปีภาษีปัจจุบันที่เลือก
   const currentYearConfig = useMemo(() => {
     return TAX_YEARS.find(y => y.yearTh === taxYearTh) || TAX_YEARS[0];
   }, [taxYearTh]);
 
-  const currentDeadline = useMemo(() => {
+  const pitStandardDeadline = useMemo(() => {
     return filingMethod === FilingMethod.ONLINE 
       ? currentYearConfig.onlineDeadline 
       : currentYearConfig.paperDeadline;
   }, [currentYearConfig, filingMethod]);
+  const currentDeadline = pitDeadlineOverride || pitStandardDeadline;
 
   // รีเซ็ตข้อมูลในส่วนของความเสี่ยงรายได้กลับสู่ค่าเริ่มต้น
   const handleResetEstimation = () => {
-    setIncomeEst({
-      income40_1: 480000,
-      incomeOther: 0,
-      expenseMethod: 'standard',
-      expenses: 0,
-      personalAllowance: 60000,
-      otherAllowances: 15000,
-      taxAlreadyPaid: 8500,
-    });
+    setIncomeEst(defaultEstimateInput());
   };
 
   // รีเซ็ตข้อมูลส่วนประมาณการภาษีมูลค่าเพิ่มกลับสู่ค่าเริ่มต้น
@@ -438,10 +445,31 @@ export default function App() {
         paymentDate: paymentDateToUse,
         taxOwed: res.taxOwed,
         criminalFineEntered: isPit ? parseMoney(pitCriminalFineInput) : parseMoney(vatCriminalFineInput),
+        filingDate: isPit ? pitFilingArg : vatFilingArg,
+        customDeadline: isPit ? pitDeadlineOverride : vatDeadlineOverride,
+        ...(isPit ? {} : { vatMultiplier }),
         ...(isPit
           ? { taxYearTh, scenario, reduction }
           : { vatMonth, vatYearTh, vatScenario, vatAssessedReduction }),
       },
+      estimate: isPit && taxOwedMode === 'estimate'
+        ? {
+            lines: estimationResult.lines.map((l) => ({ title: l.title, section: l.section, amount: l.amount, basis: l.basis, expense: l.expense, net: l.net })),
+            allowances: estimationResult.allowanceItems.map((x) => ({ label: x.label, claimed: x.claimed, allowed: x.allowed, capNote: x.capNote })),
+            assessableIncome: estimationResult.assessableIncome,
+            totalExpenses: estimationResult.totalExpenses,
+            totalAllowances: estimationResult.totalAllowances,
+            netIncome: estimationResult.netIncome,
+            progressiveTax: estimationResult.progressiveTax,
+            minTaxBase: estimationResult.minTaxBase,
+            minTax: estimationResult.minTax,
+            minTaxApplies: estimationResult.minTaxApplies,
+            taxTotal: estimationResult.taxTotal,
+            credits: estimationResult.credits,
+            additionalTax: estimationResult.additionalTax,
+            refund: estimationResult.refund,
+          }
+        : undefined,
       result: {
         taxOwed: res.taxOwed,
         monthsLate: res.monthsLate,
@@ -479,6 +507,10 @@ export default function App() {
       setTaxOwedMode('simple');
       setTaxOwedInput(formatNumberWithCommas(String(i.taxOwed)));
       setPitCriminalFineInput(i.criminalFineEntered > 0 ? formatNumberWithCommas(String(i.criminalFineEntered)) : '');
+      setPitFilingSame(!i.filingDate);
+      if (i.filingDate) setPitFilingDate(i.filingDate);
+      setPitCustomOn(!!i.customDeadline);
+      setPitCustomDeadline(i.customDeadline || '');
     } else {
       if (i.vatMonth !== undefined) setVatMonth(i.vatMonth);
       if (i.vatYearTh !== undefined) setVatYearTh(i.vatYearTh);
@@ -489,6 +521,11 @@ export default function App() {
       setVatOwedMode('simple');
       setVatOwedInput(formatNumberWithCommas(String(i.taxOwed)));
       setVatCriminalFineInput(i.criminalFineEntered > 0 ? formatNumberWithCommas(String(i.criminalFineEntered)) : '');
+      setVatFilingSame(!i.filingDate);
+      if (i.filingDate) setVatFilingDate(i.filingDate);
+      setVatCustomOn(!!i.customDeadline);
+      setVatCustomDeadline(i.customDeadline || '');
+      setVatMultiplier(i.vatMultiplier === 1 || i.vatMultiplier === 2 ? i.vatMultiplier : 'auto');
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -680,6 +717,19 @@ export default function App() {
               </div>
             </div>
 
+            <DateOptions
+              idPrefix="pit"
+              filingSame={pitFilingSame}
+              onFilingSame={setPitFilingSame}
+              filingDate={pitFilingDate}
+              onFilingDate={setPitFilingDate}
+              customOn={pitCustomOn}
+              onCustomOn={(v) => { setPitCustomOn(v); if (v && !pitCustomDeadline) setPitCustomDeadline(pitStandardDeadline); }}
+              customDeadline={pitCustomDeadline}
+              onCustomDeadline={setPitCustomDeadline}
+              standardDeadline={pitStandardDeadline}
+            />
+
             <CriminalFineField
               value={pitCriminalFineInput}
               onChange={setPitCriminalFineInput}
@@ -846,170 +896,18 @@ export default function App() {
               </motion.div>
             )}
 
-            {/* โหมด 2: ช่วยคำนวณภาษีขาด */}
+            {/* โหมด 2: ช่วยคำนวณภาษีที่ขาดจากรายได้ */}
             {taxOwedMode === 'estimate' && (
               <motion.div
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="space-y-4"
               >
-                <div className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl flex items-start gap-2 text-xs">
-                  <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-                  <div className="space-y-0.5">
-                    <span className="font-bold text-indigo-900 block">โปรแกรมช่วยประเมินเงินได้พึงประเมิน</span>
-                    <p className="text-indigo-800 font-light leading-relaxed">
-                      ช่วยคำนวณฐานภาษีบุคคลธรรมดาเพื่อหาจำนวน "ภาษีที่ชำระไม่ครบ" โดยนำมาหักลบกับภาษีเดิมที่เสียไปแล้วให้อัตโนมัติ เพื่อส่งยอดเข้าคิดเบี้ยปรับ
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* เงินได้ 40(1) */}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600 block">
-                      เงินได้พึงประเมินประเภท 40(1) (เงินเดือนสะสมทั้งปี)
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
-                      <input
-                        type="text"
-                        value={formatNumberWithCommas(incomeEst.income40_1)}
-                        onChange={(e) => {
-                          const cleanVal = e.target.value.replace(/,/g, '');
-                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
-                            setIncomeEst({ ...incomeEst, income40_1: parseFloat(cleanVal) || 0 });
-                          }
-                        }}
-                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
-                      />
-                    </div>
-                  </div>
-
-                  {/* เงินได้ประเภทอื่นๆ */}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600 block">
-                      รายได้ประเภทอื่นๆ สะสมทั้งปี (เช่น ค้าขาย, รับจ้าง)
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
-                      <input
-                        type="text"
-                        value={formatNumberWithCommas(incomeEst.incomeOther)}
-                        onChange={(e) => {
-                          const cleanVal = e.target.value.replace(/,/g, '');
-                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
-                            setIncomeEst({ ...incomeEst, incomeOther: parseFloat(cleanVal) || 0 });
-                          }
-                        }}
-                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* หักค่าใช้จ่ายส่วนที่เพิ่ม */}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600 block flex justify-between">
-                      <span>ค่าใช้จ่ายหักเหมา / เพิ่มเติม</span>
-                      <span className="text-[10px] text-indigo-600 font-light">* เงินเดือนหักเหมาให้อัตโนมัติ</span>
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
-                      <input
-                        type="text"
-                        value={formatNumberWithCommas(incomeEst.expenses)}
-                        onChange={(e) => {
-                          const cleanVal = e.target.value.replace(/,/g, '');
-                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
-                            setIncomeEst({ ...incomeEst, expenses: parseFloat(cleanVal) || 0 });
-                          }
-                        }}
-                        placeholder="หักเหมาอื่นๆ หรือตามจริง"
-                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
-                      />
-                    </div>
-                  </div>
-
-                  {/* ลดหย่อนอื่นๆ */}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600 block flex justify-between">
-                      <span>ค่าลดหย่อนอื่นๆ (รวมประกันสังคม/กองทุน)</span>
-                      <span className="text-[10px] text-emerald-600 font-light">+ ส่วนตัว 60,000 เติมให้แล้ว</span>
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
-                      <input
-                        type="text"
-                        value={formatNumberWithCommas(incomeEst.otherAllowances)}
-                        onChange={(e) => {
-                          const cleanVal = e.target.value.replace(/,/g, '');
-                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
-                            setIncomeEst({ ...incomeEst, otherAllowances: parseFloat(cleanVal) || 0 });
-                          }
-                        }}
-                        placeholder="ระบุค่าลดหย่อนเพิ่ม เช่น ดอกเบี้ยกู้บ้าน"
-                        className="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
-                  {/* ภาษีที่จ่ายล่วงหน้าแล้ว */}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600 block">
-                      ภาษีที่จ่ายไปแล้ว / โดนหัก ณ ที่จ่ายสะสม
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-2 text-xs text-slate-400 font-mono">฿</span>
-                      <input
-                        type="text"
-                        value={formatNumberWithCommas(incomeEst.taxAlreadyPaid)}
-                        onChange={(e) => {
-                          const cleanVal = e.target.value.replace(/,/g, '');
-                          if (cleanVal === '' || /^\d*\.?\d*$/.test(cleanVal)) {
-                            setIncomeEst({ ...incomeEst, taxAlreadyPaid: parseFloat(cleanVal) || 0 });
-                          }
-                        }}
-                        className="w-full bg-white border border-slate-200 text-xs rounded-lg py-1.5 pl-6 pr-4 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
-                      />
-                    </div>
-                  </div>
-
-                  {/* สรุปข้อมูลการประเมินภาษีแบบก้าวหน้า */}
-                  <div className="flex flex-col justify-end">
-                    <div className="text-right space-y-1">
-                      <span className="text-[10px] text-slate-400 font-medium block">ภาษีที่ขาด (ประเมิน)</span>
-                      <div className="text-sm font-extrabold text-indigo-700 font-mono">
-                        ฿{formatBaht(estimationResult.estimatedAdditionalTaxNeeded)}
-                      </div>
-                      <span className="text-[9px] text-slate-400 font-light block">
-                        (ยอดจริง ฿{formatBaht(estimationResult.estimatedTaxTotal)} - จ่ายแล้ว ฿{formatBaht(incomeEst.taxAlreadyPaid)})
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* แสดงรายละเอียดแบร็กเก็ตที่เสียภาษี */}
-                {estimationResult.netIncome > 0 && (
-                  <ProgressiveTaxBar
-                    netIncome={estimationResult.netIncome}
-                    bracketBreakdown={calculateProgressiveTax(estimationResult.netIncome).bracketBreakdown}
-                    totalTax={estimationResult.estimatedTaxTotal}
-                  />
-                )}
-
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleResetEstimation}
-                    className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 hover:text-slate-800 transition-colors py-1 px-2.5 rounded-lg border border-slate-200/80 bg-white"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    รีเซ็ตค่าประเมิน
-                  </button>
-                </div>
+                <IncomeEstimator
+                  value={incomeEst}
+                  result={estimationResult}
+                  onChange={setIncomeEst}
+                  onReset={handleResetEstimation}
+                />
               </motion.div>
             )}
           </div>
@@ -1308,6 +1206,19 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              <DateOptions
+                idPrefix="vat"
+                filingSame={vatFilingSame}
+                onFilingSame={setVatFilingSame}
+                filingDate={vatFilingDate}
+                onFilingDate={setVatFilingDate}
+                customOn={vatCustomOn}
+                onCustomOn={(v) => { setVatCustomOn(v); if (v && !vatCustomDeadline) setVatCustomDeadline(vatStandardDeadline); }}
+                customDeadline={vatCustomDeadline}
+                onCustomDeadline={setVatCustomDeadline}
+                standardDeadline={vatStandardDeadline}
+              />
 
               <CriminalFineField
                 value={vatCriminalFineInput}
@@ -1729,6 +1640,36 @@ export default function App() {
                     </p>
                   </div>
                 )}
+
+                {/* เบี้ยปรับตามกฎหมายกี่เท่า: ให้ตรงกับหนังสือประเมิน */}
+                <div className="p-4 bg-slate-50/70 border border-slate-100 rounded-xl space-y-2.5 text-xs text-slate-700">
+                  <span className="font-bold text-slate-800 block">เบี้ยปรับตามกฎหมาย กี่เท่าของภาษี</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { value: 'auto', title: `ตามที่ระบบเลือก (${vatScenario === 'voluntary_additional' || vatScenario === 'assessed_incorrect' ? 1 : 2} เท่า)` },
+                      { value: 1, title: '1 เท่า' },
+                      { value: 2, title: '2 เท่า' },
+                    ] as { value: 'auto' | 1 | 2; title: string }[]).map((opt) => (
+                      <button
+                        key={String(opt.value)}
+                        type="button"
+                        onClick={() => setVatMultiplier(opt.value)}
+                        className={`p-2 text-center rounded-xl border text-[11px] font-semibold transition-all ${
+                          vatMultiplier === opt.value
+                            ? 'border-indigo-500 bg-indigo-50/30 text-indigo-950'
+                            : 'border-slate-200 bg-white hover:border-slate-300'
+                        }`}
+                      >
+                        {opt.title}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-light leading-normal">
+                    เบี้ยปรับ ภ.พ.30 ขึ้นกับมาตราที่เจ้าพนักงานใช้ เช่น ม.89(2) คิด 2 เท่า หรือ ม.89(4) คิด 1 เท่าของรายการที่คลาดเคลื่อน
+                    ตัวอย่างของกรมสรรพากรแสดงว่าบางกรณีต้องเทียบหลายมาตรา ผลลัพธ์นี้จึงเป็นการประมาณการ
+                    ถ้ามีหนังสือแจ้งการประเมิน ให้เลือกจำนวนเท่าตามหนังสือและยึดยอดที่สรรพากรแจ้งเป็นหลัก
+                  </p>
+                </div>
               </div>
 
               {/* อ้างอิงทางกฎหมายของ VAT */}

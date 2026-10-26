@@ -5,7 +5,6 @@ import {
   VatAssessedReduction,
   TaxYearConfig,
   CalculationResult,
-  IncomeEstimation,
 } from '../types';
 
 // กำหนดปฏิทินวันสิ้นสุดการยื่นภาษีของแต่ละปีภาษี (ปกติยื่นในปีถัดไป)
@@ -109,17 +108,21 @@ export function calculateTaxPenalties(
   scenario: FilingScenario,
   reduction: PenaltyReduction,
   paymentDateStr: string,
-  criminalFineEntered: number = 0
+  criminalFineEntered: number = 0,
+  filingDateStr?: string, // วันที่ยื่นแบบ (ไม่ระบุ = ยื่นและชำระวันเดียวกัน)
+  deadlineOverride?: string // วันครบกำหนดที่ผู้ใช้กำหนดเอง เช่น กรณีมีประกาศขยายเวลา
 ): CalculationResult {
   const yearConfig = TAX_YEARS.find(y => y.yearTh === taxYearTh) || TAX_YEARS[0];
-  const deadlineStr = method === FilingMethod.ONLINE ? yearConfig.onlineDeadline : yearConfig.paperDeadline;
+  const deadlineStr = deadlineOverride || (method === FilingMethod.ONLINE ? yearConfig.onlineDeadline : yearConfig.paperDeadline);
 
   // 1. คำนวณเดือนล่าช้า
   const monthsLate = calculateMonthsLate(deadlineStr, paymentDateStr);
 
   // 2. ค่าปรับอาญา (ม. 35 ไม่เกิน 2,000 บาท) กรมสรรพากรไม่ได้ประกาศตารางตายตัว
   //    จึงใช้จำนวนที่ผู้ใช้กรอกตามที่สรรพากรแจ้ง (ไม่กรอก = 0 และแจ้งเตือนว่ายังไม่รวมในยอด)
-  const criminalFineApplies = scenario !== FilingScenario.VOLUNTARY || monthsLate > 0;
+  // ค่าปรับอาญาดูจาก "วันที่ยื่นแบบ" (ส่วนเงินเพิ่มดูจาก "วันที่ชำระ")
+  const filingMonthsLate = filingDateStr ? calculateMonthsLate(deadlineStr, filingDateStr) : monthsLate;
+  const criminalFineApplies = scenario !== FilingScenario.VOLUNTARY || filingMonthsLate > 0;
   const criminalFine = resolveCriminalFine(criminalFineApplies, criminalFineEntered, PIT_CRIMINAL_FINE_MAX);
 
   // 3. คำนวณเงินเพิ่ม (Surcharge) - 1.5% ต่อเดือนของภาษีที่ต้องชำระ (เศษของเดือนปัดเป็น 1 เดือน)
@@ -245,52 +248,6 @@ export function calculateProgressiveTax(netIncome: number): {
   };
 }
 
-// คำนวณประเมินรายได้และภาษีขาด (Income Estimation Helper)
-export function estimateMissingTax(est: IncomeEstimation): {
-  assessableIncome: number;
-  deductibleExpenses: number;
-  deductibleAllowances: number;
-  netIncome: number;
-  estimatedTaxTotal: number;
-  estimatedAdditionalTaxNeeded: number;
-} {
-  const assessableIncome = est.income40_1 + est.incomeOther;
-
-  // 1. หักค่าใช้จ่ายสำหรับเงินเดือน 40(1) (หักเหมา 50% ไม่เกิน 100,000 บาท)
-  let deductibleExpenses = 0;
-  if (est.expenseMethod === 'standard') {
-    deductibleExpenses = Math.min(est.income40_1 * 0.5, 100000);
-    // กรณีมีรายได้อื่นๆ ก็คำนวณหักแบบเหมา (สมมติหักเหมาทั่วไป 60% หรือให้กรอกตามจริง)
-    // เพื่อความง่ายและแม่นยำ ให้ผู้ใช้กรอก Expenses ส่วนเพิ่มเติมเอง หรือหักตามจริง
-    deductibleExpenses += est.expenses;
-  } else {
-    deductibleExpenses = est.expenses;
-  }
-
-  // 2. หักค่าลดหย่อน
-  // ค่าลดหย่อนส่วนตัว: ใช้ค่าที่รับเข้ามา (ค่าเริ่มต้น 60,000 บาท) ไม่ล็อกค่าคงที่
-  const personalAllowance = Number.isFinite(est.personalAllowance) ? est.personalAllowance : 60000;
-  const deductibleAllowances = personalAllowance + est.otherAllowances;
-
-  // 3. คำนวณเงินได้สุทธิ
-  const netIncome = Math.max(0, assessableIncome - deductibleExpenses - deductibleAllowances);
-
-  // 4. คำนวณภาษี
-  const { totalTax } = calculateProgressiveTax(netIncome);
-
-  // 5. ภาษีที่จ่ายไม่ครบ = ภาษีที่คำนวณได้ - ภาษีที่หัก/จ่ายไว้แล้ว
-  const estimatedAdditionalTaxNeeded = Math.max(0, totalTax - est.taxAlreadyPaid);
-
-  return {
-    assessableIncome,
-    deductibleExpenses,
-    deductibleAllowances,
-    netIncome,
-    estimatedTaxTotal: totalTax,
-    estimatedAdditionalTaxNeeded,
-  };
-}
-
 // === โหมดคำนวณภาษีมูลค่าเพิ่ม (VAT - ภ.พ.30) ===
 
 export interface VatCalculationResult {
@@ -358,9 +315,12 @@ export function calculateVatPenalties(
   scenario: 'voluntary_additional' | 'voluntary_late' | 'assessed_incorrect' | 'assessed_not_filed',
   paymentDateStr: string,
   criminalFineEntered: number = 0,
-  assessedReduction: VatAssessedReduction = 'NONE'
+  assessedReduction: VatAssessedReduction = 'NONE',
+  filingDateStr?: string, // วันที่ยื่นแบบ (ไม่ระบุ = ยื่นและชำระวันเดียวกัน)
+  deadlineOverride?: string, // วันครบกำหนดที่ผู้ใช้กำหนดเอง
+  multiplierOverride?: number // เบี้ยปรับตามกฎหมายกี่เท่า (ตามหนังสือประเมิน) ไม่ระบุ = ตามลักษณะที่เลือก
 ): VatCalculationResult {
-  const deadlineDate = getVatDeadline(month, yearTh, method);
+  const deadlineDate = deadlineOverride || getVatDeadline(month, yearTh, method);
   const monthsLate = calculateMonthsLate(deadlineDate, paymentDateStr);
 
   const deadline = new Date(deadlineDate);
@@ -372,7 +332,8 @@ export function calculateVatPenalties(
   const isAssessed = scenario === 'assessed_incorrect' || scenario === 'assessed_not_filed';
 
   // 1. ค่าปรับทางอาญา: ไม่มีตารางตายตัวที่ยืนยันได้ จึงใช้จำนวนที่ผู้ใช้กรอกตามที่สรรพากรแจ้ง
-  const criminalFineApplies = isAssessed || monthsLate > 0;
+  const filingMonthsLate = filingDateStr ? calculateMonthsLate(deadlineDate, filingDateStr) : monthsLate;
+  const criminalFineApplies = isAssessed || filingMonthsLate > 0;
   const criminalFine = resolveCriminalFine(criminalFineApplies, criminalFineEntered, null);
 
   // 2. เงินเพิ่ม (Surcharge) - 1.5% ต่อเดือน (เศษของเดือนปัดเป็น 1 เดือน) และสูงสุดไม่เกินยอดภาษี
@@ -384,8 +345,9 @@ export function calculateVatPenalties(
 
   // 3. เบี้ยปรับ (Penalty)
   // เบี้ยปรับตามกฎหมาย: ยื่นไม่ครบ (ม.89(4)) 1 เท่า / ไม่ยื่นแบบ (ม.89(3)) 2 เท่า ของภาษี
-  const penaltyMultiplier =
+  const defaultMultiplier =
     scenario === 'voluntary_additional' || scenario === 'assessed_incorrect' ? 1.0 : 2.0;
+  const penaltyMultiplier = multiplierOverride && multiplierOverride > 0 ? multiplierOverride : defaultMultiplier;
   const penaltyOriginal = round2(taxOwed * penaltyMultiplier);
 
   // % ของเบี้ยปรับตามกฎหมายที่ต้องเสีย
