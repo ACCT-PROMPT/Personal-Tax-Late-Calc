@@ -1,10 +1,9 @@
-name: Deploy to GitHub Pages
+name: Redirect legacy GitHub Pages URL to ACCT Prompt
 
 on:
   push:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -17,47 +16,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build
+  deploy:
+    name: Deploy account-portal redirect
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Test
-        run: npm test
-
-      - name: Build
-        run: npm run build
-
+      - name: Prepare redirect page
+        run: |
+          mkdir -p pages-redirect
+          cat > pages-redirect/index.html <<'HTML'
+          <!doctype html>
+          <html lang="th">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <meta http-equiv="refresh" content="0;url=https://acctprompt.com/my-programs?open=personal-tax-late-calc">
+              <title>เปิดโปรแกรมผ่าน ACCT Prompt</title>
+              <script>location.replace('https://acctprompt.com/my-programs?open=personal-tax-late-calc');</script>
+            </head>
+            <body>
+              <p>โปรแกรมนี้เปิดผ่านบัญชีสมาชิก ACCT Prompt</p>
+              <p><a href="https://acctprompt.com/my-programs?open=personal-tax-late-calc">ไปที่โปรแกรมของฉัน</a></p>
+            </body>
+          </html>
+          HTML
       - name: Setup Pages
         uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
+      - name: Upload redirect artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
-
-  deploy:
-    name: Deploy
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
+          path: pages-redirect
+      - name: Deploy redirect
         id: deployment
         uses: actions/deploy-pages@v4

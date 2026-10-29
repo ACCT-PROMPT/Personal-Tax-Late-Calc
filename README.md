@@ -3,7 +3,8 @@
 
 เว็บคำนวณเบี้ยปรับ เงินเพิ่ม และค่าปรับอาญา กรณียื่นภาษีล่าช้า ชำระไม่ครบ หรือถูกประเมิน
 มี 2 แท็บ คือภาษีเงินได้บุคคลธรรมดา (ภ.ง.ด.90/91) และภาษีมูลค่าเพิ่ม (ภ.พ.30)
-ทำงานฝั่งเบราว์เซอร์ทั้งหมด ไม่มี backend ไม่เก็บข้อมูลผู้ใช้
+การคำนวณและประวัติทำงานในเบราว์เซอร์ ไม่ส่งข้อมูลภาษีหรือไฟล์ไปเก็บบนเซิร์ฟเวอร์
+หน้าใช้งานจริงอยู่บน Cloudflare Workers และต้องเปิดผ่านบัญชี ACCT Prompt ที่มีสิทธิ์โปรแกรม
 
 เว็บจริง: https://tax-late-calc.acctprompt.com
 
@@ -44,8 +45,9 @@ src/utils/excel.ts       ส่งออกไฟล์ Excel (ExcelJS โหล
 src/types.ts             ชนิดข้อมูล
 src/components/          กราฟโดนัท ตัวเลขแอนิเมชัน แถบภาษีก้าวหน้า
 public/fonts/            ฟอนต์ (Poppins สำหรับ A-Z/0-9, LINE Seed Sans TH สำหรับภาษาไทย)
-nginx/tax-late-calc.conf ตั้งค่า nginx บนเซิร์ฟเวอร์
-.github/workflows/       deploy อัตโนมัติ
+worker/index.js          ตรวจ launch ticket และสิทธิ์สมาชิกก่อนส่งไฟล์แอป
+wrangler.jsonc           Cloudflare Worker และ Static Assets
+.github/workflows/       workflow สร้างและเผยแพร่ artifact
 ```
 
 ## รันในเครื่อง
@@ -60,14 +62,10 @@ npm test         # ทดสอบสูตร (รันใน CI ทุกค�
 npm run build    # ได้โฟลเดอร์ dist
 ```
 
-## Deploy
+## Deploy บน Cloudflare
 
-push ขึ้น `main` แล้ว GitHub Actions จะ build (บน GitHub) แล้วส่งไฟล์ `dist` ไปที่ self-hosted runner
-`acctprompt-aws-windows-server` คัดลอกไปที่ `C:\acctprompt-project\Apps\tax-late-calc`
-และรีโหลด nginx เสิร์ฟเป็นไฟล์ static โดยตรง ไม่ต้องมี service แยก
+ใช้ `npm run deploy:cloudflare` เพื่อ build และ deploy Worker พร้อมไฟล์ใน `dist` ไปยังบัญชี Cloudflare ที่ระบุใน `wrangler.jsonc`.
+Worker จะแลก launch ticket แบบใช้ครั้งเดียวกับ `acctprompt.com` และตั้ง cookie แบบ HttpOnly สำหรับ session ของโปรแกรม
+หากไม่มีสิทธิ์หรือสิทธิ์หมดอายุ จะไม่ส่งหน้าแอปให้ใช้งาน
 
-ตั้งค่าครั้งแรก (ทำครั้งเดียว)
-
-1. เพิ่ม DNS record `tax-late-calc` (proxied) ชี้ไปที่เดียวกับ subdomain อื่นของ `acctprompt.com`
-2. สร้าง Environment ชื่อ `production` ใน Settings ของ repo นี้ (ถ้ายังไม่มี)
-3. ตรวจว่า runner label `acctprompt-aws-windows-server` ใช้กับ repo นี้ได้ (Runner group ต้องอนุญาต repo นี้)
+ประวัติและการคำนวณยังอยู่ใน `localStorage` ของเบราว์เซอร์ ไม่ได้สำรองข้ามอุปกรณ์และไม่มีข้อมูลภาษีฝั่ง server
