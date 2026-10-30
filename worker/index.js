@@ -30,21 +30,21 @@ function messagePage(status, title, message, clearCookie = false) {
   return new Response(`<!doctype html><html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font:16px system-ui,sans-serif;max-width:620px;margin:12vh auto;padding:24px;color:#261c36"><h1>${title}</h1><p>${message}</p><p><a href="${MEMBER_ORIGIN}/my-programs" target="_top">กลับไปโปรแกรมของฉัน</a></p></body></html>`, { status, headers });
 }
 
-async function memberRequest(action, token) {
-  const response = await fetch(`${MEMBER_ORIGIN}/api/program-bridge/${action}`, {
+async function memberRequest(env, action, token) {
+  const response = await env.MEMBER_EDGE.fetch(new Request(`${MEMBER_ORIGIN}/api/program-bridge/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token, slug: PROGRAM_SLUG }),
     signal: AbortSignal.timeout(10000),
-  });
+  }));
   let body;
   try { body = await response.json(); } catch { body = null; }
   return { response, body };
 }
 
-async function validate(token) {
+async function validate(env, token) {
   if (!token) return { ok: false, unauthorized: true };
-  const { response, body } = await memberRequest('validate', token);
+  const { response, body } = await memberRequest(env, 'validate', token);
   if (response.ok && body?.slug === PROGRAM_SLUG) return { ok: true, body };
   if (response.status === 401 || response.status === 403) return { ok: false, unauthorized: true };
   return { ok: false, unauthorized: false };
@@ -64,7 +64,7 @@ export default {
         return messagePage(400, 'ลิงก์เปิดโปรแกรมไม่ถูกต้อง', 'กลับไปเปิดโปรแกรมจากหน้าโปรแกรมของฉันอีกครั้ง');
       }
       try {
-        const { response, body } = await memberRequest('redeem', ticket);
+        const { response, body } = await memberRequest(env, 'redeem', ticket);
         const expiresAt = Date.parse(body?.expiresAt || '');
         if (!response.ok || body?.slug !== PROGRAM_SLUG || !/^[a-f0-9]{64}$/.test(body?.token || '') || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
           return messagePage(response.status === 503 ? 503 : 401, 'เปิดโปรแกรมไม่สำเร็จ', 'ลิงก์อาจหมดอายุ หรือบัญชีไม่มีสิทธิ์ใช้งาน กรุณากลับไปเปิดจากโปรแกรมของฉัน', true);
@@ -85,7 +85,7 @@ export default {
     const token = tokenFromCookie(request);
     if (url.pathname === '/__member-session') {
       try {
-        const result = await validate(token);
+        const result = await validate(env, token);
         if (result.ok) return Response.json({ ok: true, expiresAt: result.body.expiresAt }, { headers: { 'Cache-Control': 'no-store' } });
         return Response.json({ ok: false }, { status: result.unauthorized ? 401 : 503, headers: { 'Cache-Control': 'no-store', ...(result.unauthorized ? { 'Set-Cookie': clearSessionCookie() } : {}) } });
       } catch {
@@ -99,7 +99,7 @@ export default {
 
     if (isDocument) {
       try {
-        const result = await validate(token);
+        const result = await validate(env, token);
         if (!result.ok) {
           if (result.unauthorized) return messagePage(401, 'สิทธิ์ใช้งานหมดอายุหรือถูกยกเลิก', 'กลับไปตรวจสอบสิทธิ์และเปิดโปรแกรมจากหน้าโปรแกรมของฉัน', true);
           return messagePage(503, 'ตรวจสอบสิทธิ์ชั่วคราวไม่ได้', 'โปรดลองโหลดหน้านี้อีกครั้งในภายหลัง');
