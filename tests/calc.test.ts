@@ -11,7 +11,7 @@ import {
   calculateVatPenalties,
   vatVoluntaryPenaltyPercent,
 } from '../src/utils/taxCalc';
-import { displayToIso, isoToDisplay, maskDateInput } from '../src/utils/dateFormat';
+import { displayToIso, isoToDisplay, maskDateInput, todayIso } from '../src/utils/dateFormat';
 import {
   IncomeLine,
   emptyAllowances,
@@ -260,4 +260,12 @@ test('แปลงไปกลับได้ค่าเดิม', () => {
   for (const iso of ['2026-06-29', '2024-02-29', '2025-12-31', '2023-04-10']) {
     assert.equal(displayToIso(isoToDisplay(iso)), iso);
   }
+});
+
+test('วันนี้ตามปฏิทินเครื่อง (เวลาท้องถิ่น) เป็น ISO และแสดงเป็น พ.ศ.', () => {
+  const d = new Date(2026, 10, 2, 23, 59); // 2 พ.ย. 2026 เวลา 23:59 ท้องถิ่น
+  assert.equal(todayIso(d), '2026-11-02');
+  assert.equal(isoToDisplay(todayIso(d)), '02/11/2569');
+  assert.equal(todayIso(new Date(2027, 0, 1, 0, 1)), '2027-01-01');
+  assert.match(todayIso(), /^\d{4}-\d{2}-\d{2}$/);
 });

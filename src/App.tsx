@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Calculator,
@@ -55,6 +55,7 @@ import { formatBaht, formatInputNumber } from './utils/format';
 import {
   HistoryRecord,
   PIT_SCENARIO_TEXT,
+  thaiDate,
   VAT_SCENARIO_TEXT,
   THAI_MONTHS_FULL,
   loadHistory,
@@ -62,13 +63,14 @@ import {
   newRecordId,
   MAX_HISTORY,
 } from './utils/history';
-import { exportRecordToExcel, exportHistoryToExcel } from './utils/excel';
+import { exportRecordToExcel, exportHistoryToExcel, exportComparisonToExcel } from './utils/excel';
 import SaveExportBar from './components/SaveExportBar';
 import HistoryPanel from './components/HistoryPanel';
 import TaxDonutChart from './components/TaxDonutChart';
 import IncomeEstimator from './components/IncomeEstimator';
 import DateOptions from './components/DateOptions';
 import DateField from './components/DateField';
+import { todayIso } from './utils/dateFormat';
 import { IncomeEstimateInput, estimateIncomeTax, defaultEstimateInput } from './utils/incomeTax';
 import { AnimatedNumber } from './components/AnimatedNumber';
 
@@ -117,7 +119,7 @@ export default function App() {
   const [vatYearTh, setVatYearTh] = useState<number>(2568);
   const [vatFilingMethod, setVatFilingMethod] = useState<FilingMethod>(FilingMethod.ONLINE);
   const [vatScenario, setVatScenario] = useState<'voluntary_additional' | 'voluntary_late' | 'assessed_incorrect' | 'assessed_not_filed'>('voluntary_additional');
-  const [vatPaymentDate, setVatPaymentDate] = useState<string>('2026-06-29');
+  const [vatPaymentDate, setVatPaymentDate] = useState<string>(() => todayIso());
 
   // โหมดการกรอกยอดภาษีค้างชำระสำหรับ VAT
   const [vatOwedMode, setVatOwedMode] = useState<'simple' | 'estimate'>('simple');
@@ -143,18 +145,31 @@ export default function App() {
   const [history, setHistory] = useState<HistoryRecord[]>(() => loadHistory());
   // วันที่ยื่นแบบ (แยกจากวันที่ชำระ) และวันครบกำหนดที่กำหนดเอง
   const [pitFilingSame, setPitFilingSame] = useState<boolean>(true);
-  const [pitFilingDate, setPitFilingDate] = useState<string>('2026-06-29');
+  const [pitFilingDate, setPitFilingDate] = useState<string>(() => todayIso());
   const [pitCustomOn, setPitCustomOn] = useState<boolean>(false);
   const [pitCustomDeadline, setPitCustomDeadline] = useState<string>('');
   const [vatFilingSame, setVatFilingSame] = useState<boolean>(true);
-  const [vatFilingDate, setVatFilingDate] = useState<string>('2026-06-29');
+  const [vatFilingDate, setVatFilingDate] = useState<string>(() => todayIso());
   const [vatCustomOn, setVatCustomOn] = useState<boolean>(false);
   const [vatCustomDeadline, setVatCustomDeadline] = useState<string>('');
   // เบี้ยปรับ ภ.พ.30 กี่เท่าตามหนังสือประเมิน: 'auto' = ตามลักษณะที่เลือก
   const [vatMultiplier, setVatMultiplier] = useState<'auto' | 1 | 2>('auto');
   
-  // วันที่คาดว่าจะยื่นชำระจริง (Default เป็นวันนี้ 2026-06-29 ตาม metadata)
-  const [paymentDate, setPaymentDate] = useState<string>('2026-06-29');
+  // วันที่คาดว่าจะยื่นชำระจริง (ค่าเริ่มต้น = วันนี้ตามปฏิทินของเครื่อง)
+  const [paymentDate, setPaymentDate] = useState<string>(() => todayIso());
+  // วันที่ปัจจุบัน แสดงที่หัวเว็บ อัปเดตเองเมื่อข้ามเที่ยงคืนหรือกลับมาเปิดหน้านี้
+  const [today, setToday] = useState<string>(() => todayIso());
+  useEffect(() => {
+    const tick = () => setToday((prev) => { const now = todayIso(); return now === prev ? prev : now; });
+    const timer = window.setInterval(tick, 30000);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', tick);
+    };
+  }, []);
 
   // ยอดภาษีขาดกรณีกรอกโดยตรง
   const [taxOwedInput, setTaxOwedInput] = useState<string>('5,000');
@@ -570,7 +585,7 @@ export default function App() {
             <div className="text-right">
               <span className="block text-slate-400 font-mono text-[10px]">วันนี้</span>
               <span className="font-semibold text-emerald-400 font-mono">
-                {formatThaiDate('2026-06-29')}
+                {thaiDate(today)}
               </span>
             </div>
           </div>
@@ -2011,19 +2026,20 @@ export default function App() {
 
         </section>
 
-        {/* ประวัติการคำนวณ (เต็มความกว้าง) */}
-        <section className="lg:col-span-12">
-          <HistoryPanel
-            records={history}
-            onLoad={handleLoadRecord}
-            onDelete={handleDeleteRecord}
-            onClear={handleClearHistory}
-            onExportAll={() => exportHistoryToExcel(history)}
-            onExportOne={(r) => exportRecordToExcel(r)}
-          />
-        </section>
-
       </main>
+
+      {/* ประวัติการคำนวณ: อยู่นอกกริดหลัก เพื่อไม่ให้การ์ดผลลัพธ์ (sticky) ลอยทับตารางเมื่อเลื่อนหน้า */}
+      <div className="max-w-7xl w-full mx-auto px-4 md:px-6 lg:px-8 pb-8">
+        <HistoryPanel
+          records={history}
+          onLoad={handleLoadRecord}
+          onDelete={handleDeleteRecord}
+          onClear={handleClearHistory}
+          onExportMany={(records, selected) => exportHistoryToExcel(records, { selected })}
+          onCompare={(records) => exportComparisonToExcel(records)}
+          onExportOne={(r) => exportRecordToExcel(r)}
+        />
+      </div>
 
       {/* ส่วนท้ายกระดาษ (Footer) */}
       <footer className="bg-slate-900 text-slate-400 text-center py-5 border-t border-slate-800 text-xs shrink-0 mt-8">

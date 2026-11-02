@@ -38,3 +38,9 @@ export function maskDateInput(raw: string): string {
   if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
 }
+
+// วันที่ปัจจุบันตามปฏิทินของเครื่องผู้ใช้ เป็น ISO "YYYY-MM-DD" (ใช้เวลาท้องถิ่น ไม่ใช่ UTC)
+export function todayIso(now: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}

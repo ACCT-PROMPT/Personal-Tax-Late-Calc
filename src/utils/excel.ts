@@ -70,12 +70,15 @@ function headerRow(ws: any, row: number, labels: string[], color = NAVY) {
 }
 
 // ---------------------------------------------------------------- ผลการคำนวณรายการเดียว
-export async function exportRecordToExcel(r: HistoryRecord): Promise<void> {
-  const ExcelJS = await loadExcelJS();
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'ระบบคิดค่าปรับภาษี';
-  wb.created = new Date();
-  const ws = wb.addWorksheet('สรุปผล', { views: [{ showGridLines: false }] });
+// ชื่อแผ่นงาน Excel: ห้ามมี \ / ? * [ ] : และยาวไม่เกิน 31 ตัวอักษร
+function sheetName(text: string): string {
+  const cleaned = text.replace(/[\\/?*[\]:]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (cleaned || 'Sheet').slice(0, 31);
+}
+
+// สร้างแผ่นสรุปผลของรายการเดียวลงใน workbook (ใช้ทั้งไฟล์รายการเดียว และไฟล์ประวัติที่เลือก)
+function addRecordSheets(wb: any, r: HistoryRecord, summaryName: string, estimateName: string) {
+  const ws = wb.addWorksheet(sheetName(summaryName), { views: [{ showGridLines: false }] });
   ws.columns = [{ width: 8 }, { width: 40 }, { width: 22 }, { width: 56 }];
   const base = { name: FONT, size: 11 };
   const res = r.result;
@@ -231,17 +234,24 @@ export async function exportRecordToExcel(r: HistoryRecord): Promise<void> {
   ws.pageSetup = { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
   ws.pageSetup.printTitlesRow = `${headRow}:${headRow}`;
 
-  // ---- แผ่นที่ 2: ที่มาของภาษี (เมื่อใช้ตัวช่วยคำนวณรายได้)
-  if (r.estimate) addEstimateSheet(wb, r, base);
+  // ---- แผ่นถัดไป: ที่มาของภาษี (เมื่อใช้ตัวช่วยคำนวณรายได้)
+  if (r.estimate) addEstimateSheet(wb, r, base, estimateName);
+}
 
+export async function exportRecordToExcel(r: HistoryRecord): Promise<void> {
+  const ExcelJS = await loadExcelJS();
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'ระบบคิดค่าปรับภาษี';
+  wb.created = new Date();
+  addRecordSheets(wb, r, 'สรุปผล', 'ที่มาของภาษี');
   const buf = await wb.xlsx.writeBuffer();
   const name = safe(`${r.kind === 'pit' ? 'ภงด90-91' : 'ภพ30'}_${r.periodText}${r.label ? '_' + r.label : ''}`);
   download(buf as ArrayBuffer, `ค่าปรับภาษี_${name}_${stamp()}.xlsx`);
 }
 
-function addEstimateSheet(wb: any, r: HistoryRecord, base: { name: string; size: number }) {
+function addEstimateSheet(wb: any, r: HistoryRecord, base: { name: string; size: number }, name: string = 'ที่มาของภาษี') {
   const e = r.estimate!;
-  const ws = wb.addWorksheet('ที่มาของภาษี', { views: [{ showGridLines: false }] });
+  const ws = wb.addWorksheet(sheetName(name), { views: [{ showGridLines: false }] });
   ws.columns = [{ width: 44 }, { width: 20 }, { width: 38 }, { width: 20 }, { width: 22 }];
   titleBar(ws, 'ที่มาของยอดภาษีที่ค้างชำระ (ภ.ง.ด.90/91)', 5);
   ws.mergeCells('A2:E2');
@@ -367,7 +377,10 @@ function addEstimateSheet(wb: any, r: HistoryRecord, base: { name: string; size:
 }
 
 // ---------------------------------------------------------------- ประวัติทั้งหมด
-export async function exportHistoryToExcel(records: HistoryRecord[]): Promise<void> {
+// รายการไม่เกินจำนวนนี้จะแนบแผ่นรายละเอียด (สูตรเต็ม) ของแต่ละรายการด้วย เกินกว่านี้ให้เฉพาะแผ่นรายการรวม
+export const MAX_DETAIL_SHEETS = 20;
+
+export async function exportHistoryToExcel(records: HistoryRecord[], opts: { selected?: boolean } = {}): Promise<void> {
   const ExcelJS = await loadExcelJS();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ระบบคิดค่าปรับภาษี';
@@ -498,6 +511,148 @@ export async function exportHistoryToExcel(records: HistoryRecord[]): Promise<vo
 
   ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
+  // แผ่นรายละเอียดรายรายการ (มีสูตรและช่องแก้ไขได้)
+  if (ordered.length > 0 && ordered.length <= MAX_DETAIL_SHEETS) {
+    ordered.forEach((r, idx) => {
+      const tag = `${idx + 1}-${r.label || r.periodText}`;
+      addRecordSheets(wb, r, tag, `${idx + 1}-ที่มาของภาษี`);
+    });
+  }
+
   const buf = await wb.xlsx.writeBuffer();
-  download(buf as ArrayBuffer, `ประวัติค่าปรับภาษี_${stamp()}.xlsx`);
+  download(buf as ArrayBuffer, `ประวัติค่าปรับภาษี${opts.selected ? '_ที่เลือก' : ''}_${stamp()}.xlsx`);
+}
+
+// ---------------------------------------------------------------- เปรียบเทียบหลายรายการ
+export const MAX_COMPARE = 10;
+
+export async function exportComparisonToExcel(records: HistoryRecord[]): Promise<void> {
+  const ExcelJS = await loadExcelJS();
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'ระบบคิดค่าปรับภาษี';
+  wb.created = new Date();
+  const ws = wb.addWorksheet('เปรียบเทียบ', { views: [{ state: 'frozen', xSplit: 1, ySplit: 4, showGridLines: false }] });
+
+  // รายการที่ 1 = บันทึกเก่าสุด (ใช้เป็นฐานเทียบ)
+  const recs = [...records].sort((a, b) => a.savedAt.localeCompare(b.savedAt)).slice(0, MAX_COMPARE);
+  const n = recs.length;
+  const lastCol = n + 1;
+  const col = (i: number) => String.fromCharCode(66 + i); // B, C, D ...
+  ws.columns = [{ width: 38 }, ...recs.map(() => ({ width: 26 }))];
+
+  titleBar(ws, `เปรียบเทียบผลการคำนวณ ${n} รายการ`, lastCol);
+  ws.mergeCells(2, 1, 2, lastCol);
+  const mixed = new Set(recs.map((r) => r.kind)).size > 1;
+  ws.getCell(2, 1).value =
+    `ออกรายงานเมื่อ ${thaiDateTime(new Date().toISOString())}   |   รายการที่ 1 = บันทึกเก่าสุด ใช้เป็นฐานเทียบ   |   ${STATUS_TEXT}` +
+    (mixed ? '   |   คำเตือน: เลือกคนละประเภทภาษี ตัวเลขเปรียบเทียบกันตรงๆ ได้จำกัด' : '');
+  ws.getCell(2, 1).font = { name: FONT, size: 10, color: { argb: mixed ? 'FFB45309' : 'FF64748B' } };
+  ws.getCell(2, 1).alignment = { wrapText: true, vertical: 'top' };
+  ws.getRow(2).height = 30;
+
+  headerRow(ws, 4, ['หัวข้อ', ...recs.map((_, i) => `รายการที่ ${i + 1}`)], INDIGO);
+  ws.getRow(4).height = 24;
+
+  let row = 5;
+  const base = { name: FONT, size: 11 };
+  const label = (text: string, strong = false) => {
+    const c = ws.getCell(row, 1);
+    c.value = text;
+    c.font = { ...base, bold: strong };
+    fill(c, LIGHT);
+    c.border = ALL_BORDERS;
+    c.alignment = { vertical: 'top', wrapText: true };
+  };
+  const section = (text: string) => {
+    ws.mergeCells(row, 1, row, lastCol);
+    const c = ws.getCell(row, 1);
+    c.value = text;
+    c.font = { name: FONT, size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+    fill(c, NAVY);
+    row++;
+  };
+  const textRow = (name: string, get: (r: HistoryRecord) => string) => {
+    label(name);
+    recs.forEach((r, i) => {
+      const c = ws.getCell(row, i + 2);
+      c.value = get(r);
+      c.font = base;
+      c.border = ALL_BORDERS;
+      c.alignment = { vertical: 'top', wrapText: true };
+    });
+    row++;
+  };
+  const numRow = (name: string, get: (r: HistoryRecord) => number, fmt: string, input = false) => {
+    label(name);
+    recs.forEach((r, i) => {
+      const c = ws.getCell(row, i + 2);
+      c.value = get(r);
+      c.numFmt = fmt;
+      c.font = { ...base, color: input ? { argb: 'FF1D4ED8' } : undefined };
+      c.alignment = { horizontal: 'right' };
+      c.border = ALL_BORDERS;
+    });
+    row++;
+  };
+  const formulaRow = (name: string, f: (c: string) => string, cached: (r: HistoryRecord, i: number) => number, fmt: string, strong = false) => {
+    label(name, strong);
+    recs.forEach((r, i) => {
+      const c = ws.getCell(row, i + 2);
+      c.value = { formula: f(col(i)), result: cached(r, i) };
+      c.numFmt = fmt;
+      c.font = { ...base, bold: strong };
+      c.alignment = { horizontal: 'right' };
+      c.border = ALL_BORDERS;
+      if (strong) fill(c, LIGHT);
+    });
+    row++;
+  };
+
+  section('ข้อมูลรายการ');
+  textRow('อ้างอิง / ชื่อลูกค้า', (r) => r.label || '-');
+  textRow('บันทึกเมื่อ', (r) => thaiDateTime(r.savedAt));
+  textRow('ประเภทภาษี', (r) => r.taxTypeText);
+  textRow('ปีภาษี / เดือนภาษี', (r) => r.periodText);
+  textRow('ลักษณะการยื่น', (r) => r.scenarioText);
+  textRow('วันครบกำหนดชำระ', (r) => thaiDate(r.deadline) + (r.inputs.customDeadline ? ' (กำหนดเอง)' : ''));
+  textRow('วันที่ชำระ', (r) => thaiDate(r.inputs.paymentDate));
+  numRow('ล่าช้า (เดือน)', (r) => r.result.monthsLate, '0');
+  numRow('เบี้ยปรับตามกฎหมาย (เท่าของภาษี)', (r) => r.result.penaltyMultiplier, '0.0');
+  numRow('% ของเบี้ยปรับที่ต้องเสีย', (r) => r.result.penaltyDiscountPercent, '0"%"');
+
+  section('จำนวนเงิน (บาท)');
+  const taxRow = row;
+  numRow('ภาษีที่ค้างชำระ', (r) => r.result.taxOwed, MONEY, true);
+  numRow('เงินเพิ่ม', (r) => r.result.surcharge, MONEY, true);
+  numRow('เบี้ยปรับที่ต้องเสีย', (r) => r.result.penaltyReduced, MONEY, true);
+  const fineRow = row;
+  numRow('ค่าปรับอาญา', (r) => r.result.criminalFine, MONEY, true);
+  const totalRow = row;
+  formulaRow('ยอดรวมที่ต้องชำระ', (c) => `SUM(${c}${taxRow}:${c}${fineRow})`, (r) => r.result.totalToPay, MONEY, true);
+  const extraRow = row;
+  formulaRow('ค่าปรับและเงินเพิ่มรวม (ไม่รวมภาษี)', (c) => `SUM(${c}${taxRow + 1}:${c}${fineRow})`, (r) => r.result.surcharge + r.result.penaltyReduced + r.result.criminalFine, MONEY);
+  formulaRow('ค่าปรับและเงินเพิ่ม เป็น % ของภาษี', (c) => `IF(${c}${taxRow}=0,0,${c}${extraRow}/${c}${taxRow})`, (r) => (r.result.taxOwed === 0 ? 0 : (r.result.surcharge + r.result.penaltyReduced + r.result.criminalFine) / r.result.taxOwed), '0.0%');
+
+  section('เทียบกับรายการที่ 1');
+  const diffRow = row;
+  const t0 = recs[0].result.totalToPay;
+  formulaRow('ยอดรวมต่างจากรายการที่ 1 (บาท)', (c) => `${c}${totalRow}-$B$${totalRow}`, (r) => r.result.totalToPay - t0, '#,##0.00;[Red]-#,##0.00');
+  formulaRow('ต่างเป็น %', (c) => `IF($B$${totalRow}=0,0,${c}${diffRow}/$B$${totalRow})`, (r) => (t0 === 0 ? 0 : (r.result.totalToPay - t0) / t0), '0.0%;[Red]-0.0%');
+  const totals = recs.map((r) => r.result.totalToPay);
+  formulaRow('อันดับยอดรวม (1 = ต่ำสุด)', (c) => `RANK(${c}${totalRow},$B$${totalRow}:$${col(n - 1)}$${totalRow},1)`, (r) => 1 + totals.filter((t) => t < r.result.totalToPay).length, '0');
+
+  row += 1;
+  const missing = recs.filter((r) => r.result.criminalFineApplies && r.result.criminalFine === 0);
+  ws.mergeCells(row, 1, row + 1, lastCol);
+  const note = ws.getCell(row, 1);
+  note.value =
+    `หมายเหตุ: ผลลัพธ์เป็นการประมาณการ อ้างอิง ${LEGAL_BASIS.directive} (${LEGAL_BASIS.url}) ตรวจสอบล่าสุด ${LEGAL_BASIS.checkedOn}` +
+    (missing.length ? ` | รายการที่ยังไม่รวมค่าปรับอาญา: ${missing.map((r) => recs.indexOf(r) + 1).join(', ')}` : '');
+  note.font = { name: FONT, size: 9, color: { argb: 'FF64748B' } };
+  note.alignment = { wrapText: true, vertical: 'top' };
+
+  ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  const buf = await wb.xlsx.writeBuffer();
+  download(buf as ArrayBuffer, `เปรียบเทียบค่าปรับภาษี_${n}รายการ_${stamp()}.xlsx`);
 }
