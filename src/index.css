@@ -41,6 +41,15 @@ body {
   background-color: #f8fafc; /* slate-50 */
 }
 
+/* มือถือ: ช่องกรอกต้อง 16px ไม่เช่นนั้น iPhone จะซูมหน้าเองเมื่อแตะช่อง */
+@media (max-width: 640px) {
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 @media print {
   /* ซ่อนส่วนที่ไม่ได้เกี่ยวข้องกับการแสดงผลใบสรุป */
   header, footer, form, button, nav, #input-section, .no-print {

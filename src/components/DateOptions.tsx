@@ -1,5 +1,6 @@
 import React from 'react';
 import { thaiDate } from '../utils/history';
+import DateField from './DateField';
 
 interface Props {
   idPrefix: string;
@@ -14,8 +15,6 @@ interface Props {
   standardDeadline: string; // วันครบกำหนดมาตรฐานของระบบ (ISO)
 }
 
-const dateCls =
-  'w-full bg-white border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors';
 
 // ตัวเลือกวันที่เพิ่มเติม: แยกวันที่ยื่นแบบจากวันที่ชำระ และกำหนดวันครบกำหนดเอง
 export default function DateOptions(p: Props) {
@@ -36,7 +35,7 @@ export default function DateOptions(p: Props) {
             <label className="text-[11px] font-semibold text-slate-600 block" htmlFor={`${p.idPrefix}-filing`}>
               วันที่ยื่นแบบ
             </label>
-            <input id={`${p.idPrefix}-filing`} type="date" value={p.filingDate} onChange={(e) => p.onFilingDate(e.target.value)} className={dateCls} />
+            <DateField id={`${p.idPrefix}-filing`} value={p.filingDate} onChange={p.onFilingDate} />
           </div>
         )}
         <p className="text-[10px] text-slate-400 font-light leading-snug">
@@ -56,13 +55,7 @@ export default function DateOptions(p: Props) {
           กำหนดวันครบกำหนดเอง (เช่น มีประกาศขยายเวลา หรือปีที่ไม่มีในรายการ)
         </label>
         {p.customOn ? (
-          <input
-            type="date"
-            value={p.customDeadline}
-            onChange={(e) => p.onCustomDeadline(e.target.value)}
-            className={dateCls}
-            aria-label="วันครบกำหนด"
-          />
+          <DateField value={p.customDeadline} onChange={p.onCustomDeadline} ariaLabel="วันครบกำหนด" />
         ) : (
           <p className="text-[10px] text-slate-400 font-light">ใช้วันครบกำหนดมาตรฐาน: {thaiDate(p.standardDeadline)}</p>
         )}

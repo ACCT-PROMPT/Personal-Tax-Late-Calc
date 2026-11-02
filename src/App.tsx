@@ -68,6 +68,7 @@ import HistoryPanel from './components/HistoryPanel';
 import TaxDonutChart from './components/TaxDonutChart';
 import IncomeEstimator from './components/IncomeEstimator';
 import DateOptions from './components/DateOptions';
+import DateField from './components/DateField';
 import { IncomeEstimateInput, estimateIncomeTax, defaultEstimateInput } from './utils/incomeTax';
 import { AnimatedNumber } from './components/AnimatedNumber';
 
@@ -705,15 +706,12 @@ export default function App() {
                     </span>
                   )}
                 </label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={paymentDate}
-                    onChange={(e) => setPaymentDate(e.target.value)}
-                    min={currentYearConfig.paperDeadline}
-                    className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
-                  />
-                </div>
+                <DateField
+                  id="pit-payment-date"
+                  value={paymentDate}
+                  onChange={setPaymentDate}
+                  min={currentYearConfig.paperDeadline}
+                />
               </div>
             </div>
 
@@ -1195,14 +1193,11 @@ export default function App() {
                         </span>
                       )}
                     </label>
-                    <div className="relative">
-                      <input
-                        type="date"
-                        value={vatPaymentDate}
-                        onChange={(e) => setVatPaymentDate(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
-                      />
-                    </div>
+                    <DateField
+                      id="vat-payment-date"
+                      value={vatPaymentDate}
+                      onChange={setVatPaymentDate}
+                    />
                   </div>
                 </div>
               </div>

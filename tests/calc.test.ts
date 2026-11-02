@@ -11,6 +11,7 @@ import {
   calculateVatPenalties,
   vatVoluntaryPenaltyPercent,
 } from '../src/utils/taxCalc';
+import { displayToIso, isoToDisplay, maskDateInput } from '../src/utils/dateFormat';
 import {
   IncomeLine,
   emptyAllowances,
@@ -224,4 +225,39 @@ test('ปัดเศษเป็นสตางค์และยอดรว�
 test('เงินเพิ่มไม่เกินยอดภาษี (เพดาน 100%)', () => {
   const v = calculateVatPenalties(1000, 1, 2560, FilingMethod.ONLINE, 'voluntary_additional', '2026-06-29');
   assert.equal(v.surcharge, 1000);
+});
+
+// ------------------------------------------------------------ วันที่ วัน/เดือน/ปี
+test('วันที่แสดงเป็น วัน/เดือน/ปี (พ.ศ.)', () => {
+  assert.equal(isoToDisplay('2026-06-29'), '29/06/2569');
+  assert.equal(isoToDisplay('2025-01-05'), '05/01/2568');
+  assert.equal(isoToDisplay(''), '');
+  assert.equal(isoToDisplay('ไม่ใช่วันที่'), '');
+});
+
+test('อ่านวันที่ที่พิมพ์: รับทั้ง พ.ศ. และ ค.ศ. และตรวจวันที่จริง', () => {
+  assert.equal(displayToIso('29/06/2569'), '2026-06-29');
+  assert.equal(displayToIso('29/06/2026'), '2026-06-29');
+  assert.equal(displayToIso('5/1/2568'), '2025-01-05');
+  assert.equal(displayToIso('29/02/2567'), '2024-02-29'); // 2567 = ค.ศ. 2024 ปีอธิกสุรทิน
+  assert.equal(displayToIso('29/02/2569'), null); // 2026 ไม่ใช่ปีอธิกสุรทิน
+  assert.equal(displayToIso('31/04/2569'), null);
+  assert.equal(displayToIso('00/06/2569'), null);
+  assert.equal(displayToIso('15/13/2569'), null);
+  assert.equal(displayToIso('29/06/69'), null);
+  assert.equal(displayToIso('abc'), null);
+});
+
+test('ใส่ / ให้อัตโนมัติขณะพิมพ์ และตัดตัวอักษรอื่น', () => {
+  assert.equal(maskDateInput('2'), '2');
+  assert.equal(maskDateInput('290'), '29/0');
+  assert.equal(maskDateInput('29062569'), '29/06/2569');
+  assert.equal(maskDateInput('29/06/2569999'), '29/06/2569');
+  assert.equal(maskDateInput('29-06-2569'), '29/06/2569');
+});
+
+test('แปลงไปกลับได้ค่าเดิม', () => {
+  for (const iso of ['2026-06-29', '2024-02-29', '2025-12-31', '2023-04-10']) {
+    assert.equal(displayToIso(isoToDisplay(iso)), iso);
+  }
 });
