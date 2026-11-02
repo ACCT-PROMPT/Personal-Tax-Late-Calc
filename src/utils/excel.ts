@@ -125,6 +125,8 @@ function addRecordSheets(wb: any, r: HistoryRecord, summaryName: string, estimat
   ws.getCell(`A${row}`).value = 'ข้อมูลที่ใช้คำนวณ (ช่องสีเหลืองแก้ไขได้ ตารางด้านล่างจะคำนวณใหม่)';
   ws.getCell(`A${row}`).font = { name: FONT, size: 12, bold: true, color: { argb: NAVY } };
   row++;
+  // ภ.ง.ด.90/91 ที่ยื่นเองไม่มีเบี้ยปรับ (ม.22) จึงไม่แสดงบรรทัดและตัวแปรเบี้ยปรับ
+  const hidePenalty = r.kind === 'pit' && res.penaltyOriginal === 0;
   const params: { key: string; label: string; value: number; fmt: string; note: string }[] = [
     { key: 'tax', label: 'ภาษีที่ค้างชำระ (บาท)', value: res.taxOwed, fmt: MONEY, note: 'ยอดภาษีที่จ่ายไม่ครบ หรือที่ถูกประเมิน' },
     { key: 'rate', label: 'อัตราเงินเพิ่มต่อเดือน', value: 0.015, fmt: '0.0%', note: r.kind === 'pit' ? 'ประมวลรัษฎากร ม.27' : 'ประมวลรัษฎากร ม.89/1' },
@@ -132,7 +134,7 @@ function addRecordSheets(wb: any, r: HistoryRecord, summaryName: string, estimat
     { key: 'mult', label: 'เบี้ยปรับตามกฎหมาย (เท่าของภาษี)', value: res.penaltyMultiplier, fmt: '0.0', note: '0 = ไม่มีเบี้ยปรับ' },
     { key: 'pct', label: '% ของเบี้ยปรับที่ต้องเสีย', value: res.penaltyDiscountPercent, fmt: '0"%"', note: r.penaltyRuleText },
     { key: 'fine', label: 'ค่าปรับอาญา (ตามที่สรรพากรแจ้ง)', value: res.criminalFine, fmt: MONEY, note: res.criminalFineApplies ? (res.criminalFine > 0 ? 'ตามที่ผู้ใช้กรอก' : 'เข้าเงื่อนไข แต่ยังไม่ได้กรอกจำนวน') : 'ไม่เข้าเงื่อนไข' },
-  ];
+  ].filter((p) => !(hidePenalty && (p.key === 'mult' || p.key === 'pct')));
   const pos: Record<string, string> = {};
   params.forEach((p) => {
     ws.getCell(row, 1).value = '';
@@ -165,12 +167,13 @@ function addRecordSheets(wb: any, r: HistoryRecord, summaryName: string, estimat
   const t = pos.tax, rt = pos.rate, mo = pos.months, mu = pos.mult, pc = pos.pct, fn = pos.fine;
   const surchargeSec = r.kind === 'pit' ? 'ม.27' : 'ม.89/1';
   const penaltySec = r.kind === 'pit' ? 'ม.22' : 'ม.89';
-  const items: [number, string, any, string][] = [
-    [1, 'ภาษีที่ค้างชำระ', { formula: `${t}`, result: res.taxOwed }, 'ยอดภาษีตามที่ระบุด้านบน'],
-    [2, `เงินเพิ่ม (${surchargeSec})`, { formula: `ROUND(MIN(${t}*${rt}*${mo},${t}),2)`, result: res.surcharge }, 'ภาษี × อัตราต่อเดือน × จำนวนเดือน แต่ไม่เกินยอดภาษี'],
-    [3, `เบี้ยปรับ (${penaltySec})`, { formula: `ROUND(ROUND(${t}*${mu},2)*${pc}/100,2)`, result: res.penaltyReduced }, 'ภาษี × เท่าตามกฎหมาย × % ที่ต้องเสีย'],
-    [4, 'ค่าปรับอาญา', { formula: `${fn}`, result: res.criminalFine }, res.criminalFineApplies && res.criminalFine === 0 ? 'ยังไม่รวมในยอด (ยังไม่ได้กรอกจำนวนที่สรรพากรแจ้ง)' : 'ตามที่สรรพากรแจ้ง'],
+  const itemDefs: [string, any, string][] = [
+    ['ภาษีที่ค้างชำระ', { formula: `${t}`, result: res.taxOwed }, 'ยอดภาษีตามที่ระบุด้านบน'],
+    [`เงินเพิ่ม (${surchargeSec})`, { formula: `ROUND(MIN(${t}*${rt}*${mo},${t}),2)`, result: res.surcharge }, 'ภาษี × อัตราต่อเดือน × จำนวนเดือน แต่ไม่เกินยอดภาษี'],
+    ...(hidePenalty ? [] : [[`เบี้ยปรับ (${penaltySec})`, { formula: `ROUND(ROUND(${t}*${mu},2)*${pc}/100,2)`, result: res.penaltyReduced }, 'ภาษี × เท่าตามกฎหมาย × % ที่ต้องเสีย']] as [string, any, string][]),
+    ['ค่าปรับอาญา', { formula: `${fn}`, result: res.criminalFine }, res.criminalFineApplies && res.criminalFine === 0 ? 'ยังไม่รวมในยอด (ยังไม่ได้กรอกจำนวนที่สรรพากรแจ้ง)' : 'ตามที่สรรพากรแจ้ง'],
   ];
+  const items: [number, string, any, string][] = itemDefs.map(([name, value, note], i) => [i + 1, name, value, note]);
   const firstItem = row;
   items.forEach(([no, name, value, note]) => {
     const c1 = ws.getCell(row, 1);

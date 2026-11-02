@@ -10,6 +10,9 @@ import {
   calculateTaxPenalties,
   calculateVatPenalties,
   vatVoluntaryPenaltyPercent,
+  getTaxYearConfig,
+  shiftToBusinessDay,
+  getVatDeadline,
 } from '../src/utils/taxCalc';
 import { displayToIso, isoToDisplay, maskDateInput, todayIso } from '../src/utils/dateFormat';
 import {
@@ -268,4 +271,45 @@ test('วันนี้ตามปฏิทินเครื่อง (เว
   assert.equal(isoToDisplay(todayIso(d)), '02/11/2569');
   assert.equal(todayIso(new Date(2027, 0, 1, 0, 1)), '2027-01-01');
   assert.match(todayIso(), /^\d{4}-\d{2}-\d{2}$/);
+});
+
+// ------------------------------------------------------------ ปีภาษีที่ระบุเอง
+test('เลื่อนวันครบกำหนดที่ตรงเสาร์-อาทิตย์เป็นวันจันทร์', () => {
+  assert.equal(shiftToBusinessDay('2024-03-31'), '2024-04-01'); // อาทิตย์
+  assert.equal(shiftToBusinessDay('2023-04-08'), '2023-04-10'); // เสาร์
+  assert.equal(shiftToBusinessDay('2026-04-08'), '2026-04-08'); // พุธ ไม่เลื่อน
+});
+
+test('ปีภาษีในตารางใช้ค่าที่ตรวจแล้ว ปีอื่นคำนวณจาก 31 มี.ค. / 8 เม.ย. ของปีถัดไป', () => {
+  const known = getTaxYearConfig(2566);
+  assert.equal(known.known, true);
+  assert.equal(known.onlineDeadline, '2024-04-09'); // วันหยุดชดเชย ต้องใช้ค่าในตาราง
+  const y2569 = getTaxYearConfig(2569);
+  assert.equal(y2569.known, false);
+  assert.equal(y2569.paperDeadline, '2027-03-31');
+  assert.equal(y2569.onlineDeadline, '2027-04-08');
+  const y2564 = getTaxYearConfig(2564);
+  assert.equal(y2564.paperDeadline, '2022-03-31');
+  assert.equal(y2564.onlineDeadline, '2022-04-08');
+  // ปีที่คำนวณได้ต้องตรงกับตารางในปีที่ไม่มีวันหยุดชดเชย
+  for (const y of [2565, 2567, 2568]) {
+    const t = TAX_YEARS.find((x) => x.yearTh === y)!;
+    const base = new Date(Date.UTC(y - 543 + 1, 2, 31));
+    assert.ok(base.getTime() > 0);
+    assert.equal(shiftToBusinessDay(`${y - 543 + 1}-03-31`), t.paperDeadline);
+    assert.equal(shiftToBusinessDay(`${y - 543 + 1}-04-08`), t.onlineDeadline);
+  }
+});
+
+test('คำนวณเงินเพิ่มของปีภาษีที่ระบุเอง (ไม่ตกไปใช้ปี 2568)', () => {
+  // ปีภาษี 2564 ออนไลน์ ครบกำหนด 8 เม.ย. 2565 ชำระ 8 มิ.ย. 2565 = ช้า 2 เดือน
+  const p = calculateTaxPenalties(10000, 2564, FilingMethod.ONLINE, FilingScenario.VOLUNTARY, PenaltyReduction.NO_REDUCTION, '2022-06-08');
+  assert.equal(p.monthsLate, 2);
+  assert.equal(p.surcharge, 300);
+});
+
+test('ภ.พ.30: กำหนดยื่นที่ตรงเสาร์-อาทิตย์เลื่อนเป็นวันทำการถัดไป', () => {
+  assert.equal(getVatDeadline(10, 2568, FilingMethod.PAPER), '2025-11-17'); // 15 พ.ย. 2025 เสาร์
+  assert.equal(getVatDeadline(10, 2568, FilingMethod.ONLINE), '2025-11-24'); // 23 พ.ย. 2025 อาทิตย์
+  assert.equal(getVatDeadline(5, 2568, FilingMethod.ONLINE), '2025-06-23'); // จันทร์ ไม่เลื่อน
 });

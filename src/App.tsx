@@ -38,6 +38,7 @@ import {
 
 import {
   TAX_YEARS,
+  getTaxYearConfig,
   LEGAL_BASIS,
   PIT_CRIMINAL_FINE_MAX,
   calculateTaxPenalties,
@@ -70,6 +71,7 @@ import TaxDonutChart from './components/TaxDonutChart';
 import IncomeEstimator from './components/IncomeEstimator';
 import DateOptions from './components/DateOptions';
 import DateField from './components/DateField';
+import YearField from './components/YearField';
 import { todayIso } from './utils/dateFormat';
 import { IncomeEstimateInput, estimateIncomeTax, defaultEstimateInput } from './utils/incomeTax';
 import { AnimatedNumber } from './components/AnimatedNumber';
@@ -219,11 +221,9 @@ export default function App() {
 1. ยอดภาษีค้างชำระหลัก: ฿${formatBaht(calculationResult.taxOwed)}
 2. ค่าปรับทางอาญา: ${calculationResult.criminalFineApplies && calculationResult.criminalFine === 0 ? 'ยังไม่รวมในยอด (ไม่เกิน 2,000 บาท ตาม ม.35 ตามที่สรรพากรแจ้ง)' : `฿${formatBaht(calculationResult.criminalFine)}`}
 3. เงินเพิ่ม (ม. 27): ฿${formatBaht(calculationResult.surcharge)} (${calculationResult.monthsLate === 0 ? '0' : (1.5 * calculationResult.monthsLate).toFixed(1)}% ต่อเดือน)
-4. ค่าเบี้ยปรับ (ม. 22): ฿${formatBaht(calculationResult.penaltyReduced)} (ลดจากยอดเต็ม ฿${formatBaht(calculationResult.penaltyOriginal)} คงเหลือ ${calculationResult.penaltyDiscountPercent}%)
------------------------------------------
+${calculationResult.penaltyOriginal > 0 ? `4. ค่าเบี้ยปรับ (ม. 22): ฿${formatBaht(calculationResult.penaltyReduced)} (ลดจากยอดเต็ม ฿${formatBaht(calculationResult.penaltyOriginal)} คงเหลือ ${calculationResult.penaltyDiscountPercent}%)\n` : ''}-----------------------------------------
 💰 ยอดรวมที่ต้องชำระทั้งหมด: ฿${formatBaht(calculationResult.totalToPay)}
-ประหยัดเบี้ยปรับได้: ฿${formatBaht(calculationResult.penaltyOriginal - calculationResult.penaltyReduced)} บาท
------------------------------------------
+${calculationResult.penaltyOriginal > 0 ? `ประหยัดเบี้ยปรับได้: ฿${formatBaht(calculationResult.penaltyOriginal - calculationResult.penaltyReduced)} บาท\n` : ''}-----------------------------------------
 *คำนวณโดยระบบประเมินค่าปรับภาษีเงินได้บุคคลธรรมดาแบบ Real-time`;
     } else {
       const scenarioText = vatScenario === 'voluntary_additional'
@@ -397,7 +397,7 @@ export default function App() {
 
   // ข้อมูลปีภาษีปัจจุบันที่เลือก
   const currentYearConfig = useMemo(() => {
-    return TAX_YEARS.find(y => y.yearTh === taxYearTh) || TAX_YEARS[0];
+    return getTaxYearConfig(taxYearTh);
   }, [taxYearTh]);
 
   const pitStandardDeadline = useMemo(() => {
@@ -433,6 +433,8 @@ export default function App() {
   const paymentDateToUse = activeTab === 'pit' ? paymentDate : vatPaymentDate;
   const yearThToUse = activeTab === 'pit' ? taxYearTh : vatYearTh;
   const filingMethodToUse = activeTab === 'pit' ? filingMethod : vatFilingMethod;
+  // ภ.ง.ด.90/91 ที่ยื่นเองไม่มีเบี้ยปรับ (ม.22) จึงซ่อนบรรทัดเบี้ยปรับ ส่วนกรณีถูกประเมินและ ภ.พ.30 ยังแสดง
+  const showPenaltyRow = resultToUse.penaltyOriginal > 0;
 
   // ---------- ประวัติและส่งออก Excel ----------
   const buildRecord = (label: string): HistoryRecord => {
@@ -643,20 +645,14 @@ export default function App() {
                   ปีภาษี (พ.ศ.)
                   <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <select
-                    value={taxYearTh}
-                    onChange={(e) => setTaxYearTh(parseInt(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 appearance-none transition-colors"
-                  >
-                    {TAX_YEARS.map((y) => (
-                      <option key={y.yearTh} value={y.yearTh}>
-                        ปีภาษี {y.yearTh} (ยื่นต้นปี {y.yearTh + 1})
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
-                </div>
+                <YearField
+                  id="pit-year"
+                  value={taxYearTh}
+                  onChange={setTaxYearTh}
+                  options={TAX_YEARS.map((y) => y.yearTh)}
+                  optionLabel={(y) => `ปีภาษี ${y} (ยื่นต้นปี ${y + 1})`}
+                  hint="ปีนี้ไม่อยู่ในรายการ ใช้กำหนดมาตรฐาน 31 มี.ค. (กระดาษ) / 8 เม.ย. (ออนไลน์) ของปีถัดไป เลื่อนเมื่อตรงวันเสาร์-อาทิตย์ ไม่รวมวันหยุดนักขัตฤกษ์หรือประกาศขยายเวลา ถ้าไม่ตรง ให้ติ๊ก 'กำหนดวันครบกำหนดเอง' ด้านล่าง"
+                />
               </div>
 
               {/* ช่องทางการยื่น */}
@@ -1130,20 +1126,14 @@ export default function App() {
                       ปีภาษี (พ.ศ.)
                       <span className="text-red-500">*</span>
                     </label>
-                    <div className="relative">
-                      <select
-                        value={vatYearTh}
-                        onChange={(e) => setVatYearTh(parseInt(e.target.value))}
-                        className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-800 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 appearance-none transition-colors"
-                      >
-                        {[2569, 2568, 2567, 2566, 2565].map((year) => (
-                          <option key={year} value={year}>
-                            พ.ศ. {year}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
-                    </div>
+                    <YearField
+                      id="vat-year"
+                      value={vatYearTh}
+                      onChange={setVatYearTh}
+                      options={[2569, 2568, 2567, 2566, 2565]}
+                      optionLabel={(y) => `พ.ศ. ${y}`}
+                      hint="ใช้กำหนดมาตรฐานวันที่ 15 (กระดาษ) / 23 (ออนไลน์) ของเดือนถัดไป เลื่อนเมื่อตรงวันเสาร์-อาทิตย์ ไม่รวมวันหยุดนักขัตฤกษ์หรือประกาศขยายเวลา ถ้าไม่ตรง ให้ติ๊ก 'กำหนดวันครบกำหนดเอง' ด้านล่าง"
+                    />
                   </div>
 
                   {/* ช่องทางการยื่น */}
@@ -1904,25 +1894,27 @@ export default function App() {
                 </span>
               </div>
 
-              {/* รายการ 4: เบี้ยปรับ */}
-              <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
-                <div className="space-y-0.5">
-                  <span className="font-bold text-slate-800 block">4. ค่าเบี้ยปรับ ({activeTab === 'pit' ? 'ม. 22' : 'ม. 89'})</span>
-                  <span className="text-[10px] text-slate-400 font-light leading-tight block">
-                    {activeTab === 'pit'
-                      ? (scenario === FilingScenario.VOLUNTARY
-                          ? 'ยื่นเพิ่มเติมด้วยตนเอง: งดเว้นเบี้ยปรับ (0%)'
-                          : `คิดจากยอดประเมิน ${resultToUse.penaltyMultiplier} เท่า ${resultToUse.penaltyDiscountPercent < 100 ? `ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : '(ยังไม่ได้รับการลด)'}`)
-                      : (isVoluntaryResult
-                          ? `ยื่นเองล่าช้า: ${resultToUse.penaltyMultiplier} เท่าของภาษี ลดเหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย (ท.ป. 81/2542 ข้อ 5)`
-                          : `คิดจากการตรวจประเมิน ${resultToUse.penaltyMultiplier} เท่าของภาษี ${resultToUse.penaltyDiscountPercent < 100 ? `ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : '(ยังไม่ได้รับการลด)'}`)
-                    }
+              {/* รายการ 4: เบี้ยปรับ (ซ่อนเมื่อไม่มีเบี้ยปรับ) */}
+              {showPenaltyRow && (
+                <div className="flex justify-between items-start py-1 border-b border-slate-100/60 last:border-0">
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-slate-800 block">4. ค่าเบี้ยปรับ ({activeTab === 'pit' ? 'ม. 22' : 'ม. 89'})</span>
+                    <span className="text-[10px] text-slate-400 font-light leading-tight block">
+                      {activeTab === 'pit'
+                        ? (scenario === FilingScenario.VOLUNTARY
+                            ? 'ยื่นเพิ่มเติมด้วยตนเอง: งดเว้นเบี้ยปรับ (0%)'
+                            : `คิดจากยอดประเมิน ${resultToUse.penaltyMultiplier} เท่า ${resultToUse.penaltyDiscountPercent < 100 ? `ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : '(ยังไม่ได้รับการลด)'}`)
+                        : (isVoluntaryResult
+                            ? `ยื่นเองล่าช้า: ${resultToUse.penaltyMultiplier} เท่าของภาษี ลดเหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย (ท.ป. 81/2542 ข้อ 5)`
+                            : `คิดจากการตรวจประเมิน ${resultToUse.penaltyMultiplier} เท่าของภาษี ${resultToUse.penaltyDiscountPercent < 100 ? `ลดเหลือ ${resultToUse.penaltyDiscountPercent}%` : '(ยังไม่ได้รับการลด)'}`)
+                      }
+                    </span>
+                  </div>
+                  <span className="font-semibold text-rose-600 font-mono">
+                    <AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" />
                   </span>
                 </div>
-                <span className="font-semibold text-rose-600 font-mono">
-                  <AnimatedNumber value={resultToUse.penaltyReduced} prefix="฿" />
-                </span>
-              </div>
+              )}
 
             </div>
 
@@ -2180,20 +2172,22 @@ export default function App() {
                       </span>
                     </div>
 
-                    {/* Item 4 */}
-                    <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
-                      <div>
-                        <span className="text-slate-600">4. เบี้ยปรับ (Penalty) {activeTab === 'pit' ? 'ม. 22' : 'ม. 89'}</span>
-                        <span className="text-[9px] text-slate-400 block font-light">
-                          {isVoluntaryResult
-                            ? `ยื่นเอง: เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย`
-                            : `เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย`}
+                    {/* Item 4: เบี้ยปรับ (ซ่อนเมื่อไม่มีเบี้ยปรับ) */}
+                    {showPenaltyRow && (
+                      <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
+                        <div>
+                          <span className="text-slate-600">4. เบี้ยปรับ (Penalty) {activeTab === 'pit' ? 'ม. 22' : 'ม. 89'}</span>
+                          <span className="text-[9px] text-slate-400 block font-light">
+                            {isVoluntaryResult
+                              ? `ยื่นเอง: เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย`
+                              : `เหลือ ${resultToUse.penaltyDiscountPercent}% ของเบี้ยปรับตามกฎหมาย`}
+                          </span>
+                        </div>
+                        <span className="font-mono font-semibold text-rose-600">
+                          ฿{formatBaht(resultToUse.penaltyReduced)}
                         </span>
                       </div>
-                      <span className="font-mono font-semibold text-rose-600">
-                        ฿{formatBaht(resultToUse.penaltyReduced)}
-                      </span>
-                    </div>
+                    )}
 
                     {/* Total */}
                     <div className="flex justify-between items-center pt-3 pb-1 border-t border-slate-300 font-extrabold text-sm text-slate-900">
@@ -2204,12 +2198,14 @@ export default function App() {
                     </div>
 
                     {/* Savings Notification */}
-                    <div className="bg-emerald-50 text-emerald-800 text-[10px] p-2.5 rounded-xl border border-emerald-100 flex items-center gap-1.5 mt-2">
-                      <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>
-                        ประหยัดเบี้ยปรับได้ <strong>฿{formatBaht(resultToUse.penaltyOriginal - resultToUse.penaltyReduced)}</strong> บาท จากการลดหย่อน/ยกเว้นตามกฎระเบียบ
-                      </span>
-                    </div>
+                    {showPenaltyRow && (
+                      <div className="bg-emerald-50 text-emerald-800 text-[10px] p-2.5 rounded-xl border border-emerald-100 flex items-center gap-1.5 mt-2">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>
+                          ประหยัดเบี้ยปรับได้ <strong>฿{formatBaht(resultToUse.penaltyOriginal - resultToUse.penaltyReduced)}</strong> บาท จากการลดหย่อน/ยกเว้นตามกฎระเบียบ
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Stamp & Footer */}

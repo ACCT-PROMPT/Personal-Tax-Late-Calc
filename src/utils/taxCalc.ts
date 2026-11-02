@@ -35,6 +35,37 @@ export const TAX_YEARS: TaxYearConfig[] = [
   }
 ];
 
+// เลื่อนวันครบกำหนดที่ตรงวันเสาร์/อาทิตย์ไปเป็นวันจันทร์ถัดไป (กำหนดเวลาที่ตรงวันหยุดให้เลื่อนเป็นวันทำการถัดไป)
+// ไม่รวมวันหยุดนักขัตฤกษ์และประกาศขยายเวลา ซึ่งต้องกำหนดวันครบกำหนดเอง
+export function shiftToBusinessDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map((x) => parseInt(x, 10));
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay(); // 0 อาทิตย์ 6 เสาร์
+  if (dow === 6) dt.setUTCDate(dt.getUTCDate() + 2);
+  else if (dow === 0) dt.setUTCDate(dt.getUTCDate() + 1);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
+}
+
+export interface TaxYearInfo extends TaxYearConfig {
+  known: boolean; // true = มีในตารางที่ตรวจสอบแล้ว false = คำนวณจากกฎมาตรฐาน
+}
+
+// กำหนดยื่น ภ.ง.ด.90/91 ของปีภาษีใดก็ได้ (พ.ศ.)
+// ปีที่อยู่ในตารางใช้ค่าที่ตรวจแล้ว ปีอื่นคำนวณจาก 31 มี.ค. (กระดาษ) และ 8 เม.ย. (ออนไลน์) ของปีถัดไป
+export function getTaxYearConfig(yearTh: number): TaxYearInfo {
+  const known = TAX_YEARS.find((y) => y.yearTh === yearTh);
+  if (known) return { ...known, known: true };
+  const yearEn = yearTh - 543;
+  return {
+    yearTh,
+    yearEn,
+    paperDeadline: shiftToBusinessDay(`${yearEn + 1}-03-31`),
+    onlineDeadline: shiftToBusinessDay(`${yearEn + 1}-04-08`),
+    known: false,
+  };
+}
+
 // แหล่งอ้างอิงกฎหมายที่ใช้ในตารางลดเบี้ยปรับ (ตรวจสอบกับเว็บกรมสรรพากรเมื่อ 26 ต.ค. 2569)
 export const LEGAL_BASIS = {
   directive: 'คำสั่งกรมสรรพากร ที่ ท.ป. 81/2542 (แก้ไขโดย ท.ป. 369/2569 มีผลตั้งแต่ 3 ก.ค. 2569)',
@@ -112,7 +143,7 @@ export function calculateTaxPenalties(
   filingDateStr?: string, // วันที่ยื่นแบบ (ไม่ระบุ = ยื่นและชำระวันเดียวกัน)
   deadlineOverride?: string // วันครบกำหนดที่ผู้ใช้กำหนดเอง เช่น กรณีมีประกาศขยายเวลา
 ): CalculationResult {
-  const yearConfig = TAX_YEARS.find(y => y.yearTh === taxYearTh) || TAX_YEARS[0];
+  const yearConfig = getTaxYearConfig(taxYearTh);
   const deadlineStr = deadlineOverride || (method === FilingMethod.ONLINE ? yearConfig.onlineDeadline : yearConfig.paperDeadline);
 
   // 1. คำนวณเดือนล่าช้า
@@ -286,7 +317,7 @@ export function getVatDeadline(month: number, yearTh: number, method: FilingMeth
   const monthStr = deadlineMonth.toString().padStart(2, '0');
   const dayStr = day.toString().padStart(2, '0');
 
-  return `${deadlineYear}-${monthStr}-${dayStr}`;
+  return shiftToBusinessDay(`${deadlineYear}-${monthStr}-${dayStr}`);
 }
 
 // ตารางลดเบี้ยปรับ ภ.พ.30 กรณียื่นแบบพร้อมชำระเองโดยไม่ได้รับคำเตือน (ท.ป. 81/2542 ข้อ 5(1))
