@@ -18,5 +18,11 @@
       "pattern": "tax-late-calc.acctprompt.com"
     }
   ],
+  "services": [
+    {
+      "binding": "MEMBER_EDGE",
+      "service": "acctprompt-domain"
+    }
+  ],
   "main": "worker/index.js"
 }
